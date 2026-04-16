@@ -69,6 +69,12 @@ func main() {
     // Byte-identical re-emit (forwarding case):
     out, _ := docxcodec.Encode(doc)
     _ = out // == raw
+
+    // One-call extraction helpers (no typed-parts round-trip needed):
+    text, _ := docxcodec.ExtractText(raw)
+    fonts, _ := docxcodec.ExtractFonts(raw)
+    fmt.Println(text)   // paragraphs, one per line
+    fmt.Println(fonts)  // e.g. [Georgia Helvetica]
 }
 ```
 

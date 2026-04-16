@@ -105,6 +105,14 @@ func TestValidate(t *testing.T) {
 			if d.Document.Document == nil || d.Document.Document.DocumentElement == nil {
 				t.Error("typed XML has no root element")
 			}
+
+			// Extraction helpers must never error on a valid fixture.
+			if _, err := d.Text(); err != nil {
+				t.Errorf("d.Text: %v", err)
+			}
+			if _, err := d.Fonts(); err != nil {
+				t.Errorf("d.Fonts: %v", err)
+			}
 		})
 	}
 }

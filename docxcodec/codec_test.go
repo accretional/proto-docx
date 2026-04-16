@@ -229,6 +229,90 @@ func TestDecodeWithMissingDocumentPart(t *testing.T) {
 	}
 }
 
+func TestExtractText(t *testing.T) {
+	raw := minimalDocx(t)
+	got, err := ExtractText(raw)
+	if err != nil {
+		t.Fatalf("ExtractText: %v", err)
+	}
+	if got != "Hello DOCX" {
+		t.Errorf("ExtractText = %q, want %q", got, "Hello DOCX")
+	}
+}
+
+func TestExtractTextSkipsTrackedDeletes(t *testing.T) {
+	// Two paragraphs: one with a tracked insert (<w:ins><w:t>added</w:t></w:ins>),
+	// one with a tracked delete (<w:del><w:delText>gone</w:delText></w:del>).
+	// The walker captures only <w:t> content, so the insert is kept and
+	// the delete is dropped.
+	var buf bytes.Buffer
+	w := zip.NewWriter(&buf)
+	f, _ := w.Create("word/document.xml")
+	_, _ = f.Write([]byte(
+		`<?xml version="1.0"?><w:document xmlns:w="http://w"><w:body>` +
+			`<w:p><w:ins><w:r><w:t>added</w:t></w:r></w:ins></w:p>` +
+			`<w:p><w:del><w:r><w:delText>gone</w:delText></w:r></w:del></w:p>` +
+			`</w:body></w:document>`))
+	_ = w.Close()
+
+	got, err := ExtractText(buf.Bytes())
+	if err != nil {
+		t.Fatalf("ExtractText: %v", err)
+	}
+	if got != "added\n" {
+		t.Errorf("ExtractText = %q, want %q", got, "added\n")
+	}
+}
+
+func TestExtractFonts(t *testing.T) {
+	var buf bytes.Buffer
+	w := zip.NewWriter(&buf)
+	f, _ := w.Create("word/fontTable.xml")
+	_, _ = f.Write([]byte(
+		`<?xml version="1.0"?><w:fonts xmlns:w="http://w">` +
+			`<w:font w:name="Georgia"/><w:font w:name="Helvetica"/>` +
+			`</w:fonts>`))
+	_ = w.Close()
+
+	names, err := ExtractFonts(buf.Bytes())
+	if err != nil {
+		t.Fatalf("ExtractFonts: %v", err)
+	}
+	if len(names) != 2 || names[0] != "Georgia" || names[1] != "Helvetica" {
+		t.Errorf("ExtractFonts = %v, want [Georgia Helvetica]", names)
+	}
+}
+
+func TestDecodedAccessors(t *testing.T) {
+	raw := minimalDocx(t)
+	d, err := DecodeWith(raw, DecodeOptions{IncludeTypedParts: true})
+	if err != nil {
+		t.Fatalf("DecodeWith: %v", err)
+	}
+	text, err := d.Text()
+	if err != nil {
+		t.Fatalf("d.Text: %v", err)
+	}
+	if text != "Hello DOCX" {
+		t.Errorf("d.Text = %q, want %q", text, "Hello DOCX")
+	}
+
+	// minimalDocx has no fontTable.xml — Fonts should return nil,
+	// not an error.
+	fonts, err := d.Fonts()
+	if err != nil {
+		t.Fatalf("d.Fonts: %v", err)
+	}
+	if fonts != nil {
+		t.Errorf("d.Fonts = %v, want nil", fonts)
+	}
+
+	// minimalDocx has no media parts either.
+	if imgs := d.Images(); imgs != nil {
+		t.Errorf("d.Images = %v, want nil", imgs)
+	}
+}
+
 func TestDecodeTrackedChanges(t *testing.T) {
 	var buf bytes.Buffer
 	w := zip.NewWriter(&buf)
