@@ -86,9 +86,25 @@ func TestValidate(t *testing.T) {
 				t.Fatal("DocxPackage nil")
 			}
 			// Every fixture has word/document.xml, so Document/Body must
-			// be set.
+			// be set, and the typed body tree must have at least one
+			// Paragraph child (every fixture has ≥1 <w:p>).
 			if doc.DocxPackage.Document == nil || doc.DocxPackage.Document.Body == nil {
-				t.Error("Document/Body not populated")
+				t.Fatal("Document/Body not populated")
+			}
+			body := doc.DocxPackage.Document.Body
+			if len(body.Content) == 0 {
+				t.Error("Body.Content is empty — typed tree not populated")
+			} else {
+				anyPara := false
+				for _, e := range body.Content {
+					if e.GetParagraph() != nil {
+						anyPara = true
+						break
+					}
+				}
+				if !anyPara {
+					t.Error("Body.Content has no Paragraph entries")
+				}
 			}
 
 			// Exercise the typed-parts path too: word/document.xml

@@ -117,32 +117,199 @@ func readZipFile(f *zip.File) ([]byte, error) {
 	return io.ReadAll(rc)
 }
 
-// parseDocumentXML scans word/document.xml for paragraph count and
-// tracked-change markers (w:ins / w:del). It also allocates an empty
-// Document/Body pair on the package so downstream consumers can tell
-// the document XML was present.
+// parseDocumentXML walks word/document.xml and builds the typed-proto
+// tree under DocxPackage.Document.Body: paragraphs, runs, text,
+// tracked-change wrappers, breaks, and tabs. Summary fields
+// (ParagraphCount, HasTrackedChanges) are populated as a side effect.
+//
+// Scope is deliberately narrow — the text-bearing subset consumers
+// hit first: Paragraph → (Run | TrackedChangeInsertion |
+// TrackedChangeDeletion) → (TextContent | DeletedText | Break | Tab).
+// Tables, hyperlinks, SDTs, bookmarks, field runs, and the rest of the
+// ParagraphChild / RunChild oneofs are not yet modeled here; they are
+// still present in the raw-bytes path and surface via the typed
+// xmlcodec tree on DecodeWith.
 func parseDocumentXML(data []byte, doc *pb.DocxDocumentWithMetadata) {
-	doc.DocxPackage.Document = &pb.Document{Body: &pb.Body{}}
+	body := &pb.Body{}
+	doc.DocxPackage.Document = &pb.Document{Body: body}
 
 	dec := xml.NewDecoder(bytes.NewReader(data))
 	dec.Strict = false
+
+	var (
+		curPara    *pb.Paragraph
+		curRun     *pb.Run
+		curIns     *pb.TrackedChangeInsertion
+		curDel     *pb.TrackedChangeDeletion
+		curText    *pb.TextContent
+		curDelText *pb.DeletedText
+	)
+
+	// attachRunChild appends a finished Run to whichever container is
+	// currently open — a tracked-change wrapper if one is active, else
+	// the paragraph directly.
+	attachRun := func(r *pb.Run) {
+		child := &pb.ParagraphChild{Child: &pb.ParagraphChild_Run{Run: r}}
+		switch {
+		case curIns != nil:
+			curIns.Content = append(curIns.Content, child)
+		case curDel != nil:
+			curDel.Content = append(curDel.Content, child)
+		case curPara != nil:
+			curPara.Content = append(curPara.Content, child)
+		}
+	}
 
 	for {
 		tok, err := dec.Token()
 		if err != nil {
 			break
 		}
-		se, ok := tok.(xml.StartElement)
-		if !ok {
-			continue
-		}
-		switch se.Name.Local {
-		case "p":
-			doc.ParagraphCount++
-		case "ins", "del":
-			doc.HasTrackedChanges = true
+		switch t := tok.(type) {
+		case xml.StartElement:
+			switch t.Name.Local {
+			case "p":
+				doc.ParagraphCount++
+				curPara = &pb.Paragraph{}
+			case "ins":
+				doc.HasTrackedChanges = true
+				curIns = &pb.TrackedChangeInsertion{Info: parseTrackedInfo(t)}
+			case "del":
+				doc.HasTrackedChanges = true
+				curDel = &pb.TrackedChangeDeletion{Info: parseTrackedInfo(t)}
+			case "r":
+				curRun = &pb.Run{}
+			case "t":
+				if curRun != nil {
+					curText = &pb.TextContent{PreserveSpace: hasPreserveSpace(t)}
+				}
+			case "delText":
+				if curRun != nil {
+					curDelText = &pb.DeletedText{PreserveSpace: hasPreserveSpace(t)}
+				}
+			case "br":
+				if curRun != nil {
+					curRun.Content = append(curRun.Content, &pb.RunChild{
+						Child: &pb.RunChild_Br{Br: &pb.Break{Type: parseBreakType(t)}},
+					})
+				}
+			case "tab":
+				if curRun != nil {
+					curRun.Content = append(curRun.Content, &pb.RunChild{
+						Child: &pb.RunChild_Tab{Tab: &pb.Tab{}},
+					})
+				}
+			}
+		case xml.CharData:
+			if curText != nil {
+				curText.Value += string(t)
+			} else if curDelText != nil {
+				curDelText.Value += string(t)
+			}
+		case xml.EndElement:
+			switch t.Name.Local {
+			case "t":
+				if curText != nil && curRun != nil {
+					curRun.Content = append(curRun.Content, &pb.RunChild{
+						Child: &pb.RunChild_Text{Text: curText},
+					})
+				}
+				curText = nil
+			case "delText":
+				if curDelText != nil && curRun != nil {
+					curRun.Content = append(curRun.Content, &pb.RunChild{
+						Child: &pb.RunChild_DelText{DelText: curDelText},
+					})
+				}
+				curDelText = nil
+			case "r":
+				if curRun != nil {
+					attachRun(curRun)
+				}
+				curRun = nil
+			case "ins":
+				if curIns != nil && curPara != nil {
+					curPara.Content = append(curPara.Content, &pb.ParagraphChild{
+						Child: &pb.ParagraphChild_Ins{Ins: curIns},
+					})
+				}
+				curIns = nil
+			case "del":
+				if curDel != nil && curPara != nil {
+					curPara.Content = append(curPara.Content, &pb.ParagraphChild{
+						Child: &pb.ParagraphChild_Del{Del: curDel},
+					})
+				}
+				curDel = nil
+			case "p":
+				if curPara != nil {
+					body.Content = append(body.Content, &pb.BlockLevelElement{
+						Element: &pb.BlockLevelElement_Paragraph{Paragraph: curPara},
+					})
+				}
+				curPara = nil
+			}
 		}
 	}
+}
+
+// parseTrackedInfo extracts the w:id / w:author / w:date attributes
+// from a w:ins or w:del start element.
+func parseTrackedInfo(se xml.StartElement) *pb.TrackedChangeInfo {
+	info := &pb.TrackedChangeInfo{}
+	for _, a := range se.Attr {
+		switch a.Name.Local {
+		case "id":
+			if n, err := parseInt32(a.Value); err == nil {
+				info.Id = n
+			}
+		case "author":
+			info.Author = a.Value
+		case "date":
+			info.Date = a.Value
+		}
+	}
+	return info
+}
+
+// hasPreserveSpace returns true when the element carries
+// xml:space="preserve".
+func hasPreserveSpace(se xml.StartElement) bool {
+	for _, a := range se.Attr {
+		if a.Name.Space == "xml" && a.Name.Local == "space" && a.Value == "preserve" {
+			return true
+		}
+		if a.Name.Local == "space" && a.Value == "preserve" {
+			return true
+		}
+	}
+	return false
+}
+
+// parseBreakType maps w:type="page|column|textWrapping" to the
+// corresponding enum value. Missing type is treated as the default
+// (page, which is proto value 0).
+func parseBreakType(se xml.StartElement) pb.BreakType {
+	for _, a := range se.Attr {
+		if a.Name.Local != "type" {
+			continue
+		}
+		switch a.Value {
+		case "page":
+			return pb.BreakType_BREAK_PAGE
+		case "column":
+			return pb.BreakType_BREAK_COLUMN
+		case "textWrapping":
+			return pb.BreakType_BREAK_TEXT_WRAPPING
+		}
+	}
+	return pb.BreakType_BREAK_PAGE
+}
+
+func parseInt32(s string) (int32, error) {
+	var n int32
+	_, err := fmt.Sscanf(s, "%d", &n)
+	return n, err
 }
 
 // parseContentTypes parses [Content_Types].xml into a ContentTypes

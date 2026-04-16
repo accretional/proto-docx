@@ -168,16 +168,16 @@ is not introspectable via typed fields:
   `openformat.proto` and `pdf_document.proto` which aren't vendored
   here. Users that want typed-proto extraction can compose on top of
   the plain-Go returns.
-- **Typed-proto population of the main body is shallow.** `Decode`
-  detects paragraphs / tracked changes / media / fonts and populates
-  the summary fields on `DocxDocumentWithMetadata`, but
-  `DocxPackage.Document.Body.Paragraphs[*].Runs[*].Text` is left
-  empty. Consumers who want typed-proto access to paragraph content
-  today must either (a) use `ExtractText` for a flat string, or (b)
-  walk the `*XmlDocumentWithMetadata` tree on `Decoded.Document`.
-  Populating `Body` directly is mechanical but wide — every OOXML
-  run-level construct (runs, text, breaks, tabs, nested structures)
-  maps to a specific proto field.
+- **Typed-proto body population covers only the text-bearing subset.**
+  `Decode` now fills `DocxPackage.Document.Body.Content` with typed
+  `Paragraph` / `Run` / `TextContent` / `DeletedText` / `Break` / `Tab`
+  entries, plus `TrackedChangeInsertion` / `TrackedChangeDeletion`
+  wrappers carrying their `TrackedChangeInfo`. Everything outside that
+  subset — tables (`w:tbl`), hyperlinks, structured document tags
+  (`w:sdt`), bookmarks, field-char/instr runs, drawings, pictures,
+  and the long tail of `RunChild` variants — is still unpopulated in
+  the typed tree. Consumers that need them must walk the typed XML
+  tree on `Decoded.Document` (via `DecodeWith`) instead.
 - **DOCX conformance class / version detection.** Strict vs.
   transitional OOXML isn't surfaced on `DocxDocumentWithMetadata`;
   callers have to inspect `Package.ContentTypes` themselves.

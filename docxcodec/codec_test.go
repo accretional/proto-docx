@@ -455,6 +455,155 @@ func TestDecodedAccessors(t *testing.T) {
 	}
 }
 
+// TestDecodeBodyTypedTreeMinimal verifies that the minimal fixture's
+// single paragraph flows into DocxPackage.Document.Body.Content as a
+// Paragraph > Run > TextContent triple.
+func TestDecodeBodyTypedTreeMinimal(t *testing.T) {
+	doc, err := Decode(minimalDocx(t))
+	if err != nil {
+		t.Fatalf("Decode: %v", err)
+	}
+	body := doc.DocxPackage.Document.Body
+	if len(body.Content) != 1 {
+		t.Fatalf("body.Content len = %d, want 1", len(body.Content))
+	}
+	para := body.Content[0].GetParagraph()
+	if para == nil {
+		t.Fatal("body.Content[0] is not a Paragraph")
+	}
+	if len(para.Content) != 1 {
+		t.Fatalf("para.Content len = %d, want 1", len(para.Content))
+	}
+	run := para.Content[0].GetRun()
+	if run == nil {
+		t.Fatal("para.Content[0] is not a Run")
+	}
+	if len(run.Content) != 1 {
+		t.Fatalf("run.Content len = %d, want 1", len(run.Content))
+	}
+	text := run.Content[0].GetText()
+	if text == nil {
+		t.Fatal("run.Content[0] is not a TextContent")
+	}
+	if text.Value != "Hello DOCX" {
+		t.Errorf("text.Value = %q, want %q", text.Value, "Hello DOCX")
+	}
+}
+
+// TestDecodeBodyTypedTreeTracked exercises both tracked-change
+// paragraph children: one <w:ins> wrapping a <w:r><w:t>, and one
+// <w:del> wrapping a <w:r><w:delText>. Author / date / id attributes
+// must also flow onto TrackedChangeInfo.
+func TestDecodeBodyTypedTreeTracked(t *testing.T) {
+	var buf bytes.Buffer
+	w := zip.NewWriter(&buf)
+	f, _ := w.Create("word/document.xml")
+	_, _ = f.Write([]byte(
+		`<?xml version="1.0"?><w:document xmlns:w="http://w"><w:body>` +
+			`<w:p><w:ins w:id="3" w:author="alice" w:date="2026-04-16T00:00:00Z"><w:r><w:t>added</w:t></w:r></w:ins></w:p>` +
+			`<w:p><w:del w:id="4" w:author="bob" w:date="2026-04-17T00:00:00Z"><w:r><w:delText>gone</w:delText></w:r></w:del></w:p>` +
+			`</w:body></w:document>`))
+	_ = w.Close()
+
+	doc, err := Decode(buf.Bytes())
+	if err != nil {
+		t.Fatalf("Decode: %v", err)
+	}
+	body := doc.DocxPackage.Document.Body
+	if len(body.Content) != 2 {
+		t.Fatalf("body.Content len = %d, want 2", len(body.Content))
+	}
+
+	ins := body.Content[0].GetParagraph().Content[0].GetIns()
+	if ins == nil {
+		t.Fatal("expected ParagraphChild_Ins")
+	}
+	if ins.Info == nil || ins.Info.Id != 3 || ins.Info.Author != "alice" || ins.Info.Date != "2026-04-16T00:00:00Z" {
+		t.Errorf("ins.Info = %+v", ins.Info)
+	}
+	if len(ins.Content) != 1 {
+		t.Fatalf("ins.Content len = %d, want 1", len(ins.Content))
+	}
+	if got := ins.Content[0].GetRun().Content[0].GetText().Value; got != "added" {
+		t.Errorf("inserted text = %q, want %q", got, "added")
+	}
+
+	del := body.Content[1].GetParagraph().Content[0].GetDel()
+	if del == nil {
+		t.Fatal("expected ParagraphChild_Del")
+	}
+	if del.Info == nil || del.Info.Id != 4 || del.Info.Author != "bob" {
+		t.Errorf("del.Info = %+v", del.Info)
+	}
+	if got := del.Content[0].GetRun().Content[0].GetDelText().Value; got != "gone" {
+		t.Errorf("deleted text = %q, want %q", got, "gone")
+	}
+}
+
+// TestDecodeBodyTypedTreeBreakAndTab verifies that <w:br> and <w:tab>
+// inside a run land on RunChild_Br / RunChild_Tab, and that the break's
+// type attribute maps to the Break.Type enum.
+func TestDecodeBodyTypedTreeBreakAndTab(t *testing.T) {
+	var buf bytes.Buffer
+	w := zip.NewWriter(&buf)
+	f, _ := w.Create("word/document.xml")
+	_, _ = f.Write([]byte(
+		`<?xml version="1.0"?><w:document xmlns:w="http://w"><w:body>` +
+			`<w:p><w:r><w:t>before</w:t><w:br w:type="page"/><w:tab/><w:t>after</w:t></w:r></w:p>` +
+			`</w:body></w:document>`))
+	_ = w.Close()
+
+	doc, err := Decode(buf.Bytes())
+	if err != nil {
+		t.Fatalf("Decode: %v", err)
+	}
+	run := doc.DocxPackage.Document.Body.Content[0].GetParagraph().Content[0].GetRun()
+	if len(run.Content) != 4 {
+		t.Fatalf("run.Content len = %d, want 4", len(run.Content))
+	}
+	if v := run.Content[0].GetText().Value; v != "before" {
+		t.Errorf("run[0].Text = %q, want before", v)
+	}
+	br := run.Content[1].GetBr()
+	if br == nil {
+		t.Fatal("run[1] is not a Break")
+	}
+	if br.Type != pb.BreakType_BREAK_PAGE {
+		t.Errorf("br.Type = %v, want BREAK_PAGE", br.Type)
+	}
+	if run.Content[2].GetTab() == nil {
+		t.Error("run[2] is not a Tab")
+	}
+	if v := run.Content[3].GetText().Value; v != "after" {
+		t.Errorf("run[3].Text = %q, want after", v)
+	}
+}
+
+// TestDecodeBodyTypedTreePreserveSpace covers xml:space="preserve" on
+// <w:t> — common for runs containing leading/trailing whitespace.
+func TestDecodeBodyTypedTreePreserveSpace(t *testing.T) {
+	var buf bytes.Buffer
+	w := zip.NewWriter(&buf)
+	f, _ := w.Create("word/document.xml")
+	_, _ = f.Write([]byte(
+		`<?xml version="1.0"?><w:document xmlns:w="http://w" xmlns:xml="http://www.w3.org/XML/1998/namespace"><w:body>` +
+			`<w:p><w:r><w:t xml:space="preserve"> leading</w:t></w:r></w:p>` +
+			`</w:body></w:document>`))
+	_ = w.Close()
+
+	doc, err := Decode(buf.Bytes())
+	if err != nil {
+		t.Fatalf("Decode: %v", err)
+	}
+	text := doc.DocxPackage.Document.Body.Content[0].GetParagraph().Content[0].GetRun().Content[0].GetText()
+	if !text.PreserveSpace {
+		t.Error("PreserveSpace = false, want true")
+	}
+	if text.Value != " leading" {
+		t.Errorf("Value = %q, want %q", text.Value, " leading")
+	}
+}
+
 func TestDecodeTrackedChanges(t *testing.T) {
 	var buf bytes.Buffer
 	w := zip.NewWriter(&buf)
