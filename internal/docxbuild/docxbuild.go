@@ -25,12 +25,24 @@ type Spec struct {
 	Images        []Image  // media parts under word/media/
 	Sections      int      // extra w:sectPr breaks inside the body
 	IncludeStyles bool     // emit an empty word/styles.xml stub
+	Tables        []Table  // each appended to the body after paragraphs
 }
 
 // Image is a single media part embedded under word/media/.
 type Image struct {
 	Name string // filename under word/media/ (e.g. "image1.png")
 	Data []byte // raw bytes
+}
+
+// Table is a rectangular table spec consumed by buildTable. Each cell
+// renders as a single paragraph containing one run with the given text.
+// GridCols, when non-empty, becomes the <w:tblGrid> column widths in
+// DXA (twips); otherwise a uniform split of a 9000-twip table is
+// emitted. StyleID populates <w:tblStyle>.
+type Table struct {
+	StyleID  string     // <w:tblStyle w:val="..."/>
+	GridCols []int32    // per-column width in DXA (twips)
+	Rows     [][]string // row of cell texts
 }
 
 // Build returns the bytes of the DOCX package described by s, or an
@@ -187,6 +199,9 @@ func buildDocument(s Spec) string {
 	if s.TrackedDelete != "" {
 		sb.WriteString(`<w:p><w:del w:id="2" w:author="t" w:date="2026-04-16T00:00:00Z"><w:r><w:delText>` + escape(s.TrackedDelete) + `</w:delText></w:r></w:del></w:p>`)
 	}
+	for _, tbl := range s.Tables {
+		sb.WriteString(buildTable(tbl))
+	}
 	sb.WriteString(buildSectPr(s))
 	sb.WriteString(`</w:body></w:document>`)
 	return sb.String()
@@ -220,6 +235,61 @@ func buildSectPr(s Spec) string {
 
 func paragraph(text string) string {
 	return `<w:p><w:r><w:t>` + escape(text) + `</w:t></w:r></w:p>`
+}
+
+// buildTable emits a <w:tbl> for the given Table spec. If t.GridCols is
+// empty the grid is inferred from the first row by uniformly splitting
+// 9000 twips; if Rows is empty, nothing is emitted.
+func buildTable(t Table) string {
+	if len(t.Rows) == 0 {
+		return ""
+	}
+	cols := t.GridCols
+	if len(cols) == 0 {
+		n := int32(len(t.Rows[0]))
+		if n == 0 {
+			return ""
+		}
+		w := int32(9000) / n
+		cols = make([]int32, n)
+		for i := range cols {
+			cols[i] = w
+		}
+	}
+	var sb strings.Builder
+	sb.WriteString(`<w:tbl>`)
+	sb.WriteString(`<w:tblPr>`)
+	if t.StyleID != "" {
+		sb.WriteString(`<w:tblStyle w:val="` + escape(t.StyleID) + `"/>`)
+	}
+	total := int32(0)
+	for _, c := range cols {
+		total += c
+	}
+	sb.WriteString(fmt.Sprintf(`<w:tblW w:w="%d" w:type="dxa"/>`, total))
+	sb.WriteString(`</w:tblPr>`)
+	sb.WriteString(`<w:tblGrid>`)
+	for _, c := range cols {
+		sb.WriteString(fmt.Sprintf(`<w:gridCol w:w="%d"/>`, c))
+	}
+	sb.WriteString(`</w:tblGrid>`)
+	for _, row := range t.Rows {
+		sb.WriteString(`<w:tr>`)
+		for i, cell := range row {
+			w := int32(0)
+			if i < len(cols) {
+				w = cols[i]
+			}
+			sb.WriteString(`<w:tc><w:tcPr>`)
+			sb.WriteString(fmt.Sprintf(`<w:tcW w:w="%d" w:type="dxa"/>`, w))
+			sb.WriteString(`</w:tcPr>`)
+			sb.WriteString(paragraph(cell))
+			sb.WriteString(`</w:tc>`)
+		}
+		sb.WriteString(`</w:tr>`)
+	}
+	sb.WriteString(`</w:tbl>`)
+	return sb.String()
 }
 
 func buildFontTable(fonts []string) string {

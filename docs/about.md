@@ -166,6 +166,21 @@ and leaf `TextContent` / `DeletedText` / `Break` / `Tab` values at the
 bottom. Walking this tree lets consumers inspect document content
 through the proto API rather than re-parsing `word/document.xml`.
 
+![Tables fixture rendered](../screenshots/docx-rendered-tables.png)
+
+*Figure 5.* The tables fixture (`data/generated/12_tables.docx`)
+rendered back to HTML purely from the typed `Body.Content` — one
+`<table>` per `pb.Table`, one `<tr>` per `TableRow`, one `<td>` per
+`TableCell`, with cell text pulled from each cell's first paragraph.
+
+![Typed Body.Content with Tables](../screenshots/docx-typed-tables.png)
+
+*Figure 6.* The same fixture as a JSON projection of the typed proto
+tree: `TableProperties.style_id`, `TableProperties.width`,
+`TableGrid.columns`, and each `TableCell`'s `.Properties.Width` and
+`.Properties.GridSpan` flow onto real proto fields that consumers can
+query without re-parsing the OOXML.
+
 ## Where to go next
 
 - `docxcodec/` — the codec itself (`Decode`, `Encode`, `IsDocx`).

@@ -78,11 +78,30 @@ func main() {
 	writeIf(parts, []byte(renderParts(raw)), *force)
 	writeIf(typedBody, []byte(renderTypedBody(doc)), *force)
 
+	// Second fixture: the tables fixture. We always point at
+	// data/generated/12_tables.docx so the table views stay aligned
+	// with the fixture gen-fixtures produces — independent of -fixture.
+	tablesFixture := filepath.Join(repoRoot(), "data/generated/12_tables.docx")
+	tablesRaw, err := os.ReadFile(tablesFixture)
+	if err != nil {
+		die("read tables fixture %s: %v", tablesFixture, err)
+	}
+	tablesDoc, err := docxcodec.Decode(tablesRaw)
+	if err != nil {
+		die("decode tables fixture: %v", err)
+	}
+	renderedTables := filepath.Join(*htmlDir, "docx-rendered-tables.html")
+	typedTables := filepath.Join(*htmlDir, "docx-typed-tables.html")
+	writeIf(renderedTables, []byte(renderTablesHTML(tablesDoc)), *force)
+	writeIf(typedTables, []byte(renderTypedTables(tablesDoc)), *force)
+
 	targets := []target{
 		{html: rendered, png: filepath.Join(*outDir, "docx-rendered.png"), caption: "Kitchen-sink DOCX (plain-text paragraphs)"},
 		{html: decoded, png: filepath.Join(*outDir, "docx-decoded.png"), caption: "Decoded DocxDocumentWithMetadata"},
 		{html: parts, png: filepath.Join(*outDir, "docx-parts.png"), caption: "OPC package parts"},
 		{html: typedBody, png: filepath.Join(*outDir, "docx-typed-body.png"), caption: "Typed Body.Content tree (Paragraph/Run/Text/Ins/Del)"},
+		{html: renderedTables, png: filepath.Join(*outDir, "docx-rendered-tables.png"), caption: "Tables fixture rendered as HTML"},
+		{html: typedTables, png: filepath.Join(*outDir, "docx-typed-tables.png"), caption: "Typed Body.Content with Table/Row/Cell children"},
 	}
 
 	useRealCaptures := chromeRPCReachable(addr)
@@ -326,6 +345,189 @@ func renderTypedBody(doc *pb.DocxDocumentWithMetadata) string {
 pre{background:#0f172a;color:#f8fafc;padding:16px;border-radius:6px;overflow:auto}</style>
 </head><body>
 <h1>DocxPackage.Document.Body.Content (typed proto tree)</h1>
+<pre>%s</pre>
+</body></html>`, htmlEscape(string(b)))
+}
+
+// renderTablesHTML turns the tables fixture into an HTML table view —
+// the human-friendly projection of what parseTable captures. Each
+// Table becomes a <table>, each TableRow a <tr>, each TableCell a
+// <td> with its first Paragraph's text as the visible string.
+func renderTablesHTML(doc *pb.DocxDocumentWithMetadata) string {
+	var sb []byte
+	sb = append(sb, []byte(`<!doctype html>
+<html><head><meta charset="utf-8"><title>Tables fixture</title>
+<style>body{font-family:Georgia,serif;padding:48px;max-width:820px;margin:auto}
+h1{font-size:22px;color:#222}
+table{border-collapse:collapse;margin:12px 0;font-family:system-ui,sans-serif;font-size:14px}
+th,td{border:1px solid #bbb;padding:8px 14px;vertical-align:top}
+th{background:#eef3fb;text-align:left}
+.meta{font-family:monospace;font-size:11px;color:#777}</style>
+</head><body>
+<div class="meta">data/generated/12_tables.docx → docxcodec.Decode → Body.Content</div>
+<h1>Tables fixture (typed Body.Content)</h1>
+`)...)
+	if doc.DocxPackage == nil || doc.DocxPackage.Document == nil || doc.DocxPackage.Document.Body == nil {
+		return string(append(sb, []byte(`<p>(empty body)</p></body></html>`)...))
+	}
+	for _, be := range doc.DocxPackage.Document.Body.Content {
+		if p := be.GetParagraph(); p != nil {
+			txt := firstParagraphText(p)
+			if txt != "" {
+				sb = append(sb, []byte("<p>"+htmlEscape(txt)+"</p>")...)
+			}
+			continue
+		}
+		tbl := be.GetTable()
+		if tbl == nil {
+			continue
+		}
+		sb = append(sb, []byte("<table>")...)
+		// Treat the first row as a header only when the table has more
+		// than one row — a single-row table is almost certainly data,
+		// not a header.
+		headerFirst := len(tbl.Content) > 1
+		for rowIdx, rc := range tbl.Content {
+			row := rc.GetRow()
+			if row == nil {
+				continue
+			}
+			sb = append(sb, []byte("<tr>")...)
+			for _, cc := range row.Content {
+				cell := cc.GetCell()
+				if cell == nil {
+					continue
+				}
+				text := ""
+				for _, el := range cell.Content {
+					if p := el.GetParagraph(); p != nil {
+						text = firstParagraphText(p)
+						break
+					}
+				}
+				tag := "td"
+				if rowIdx == 0 && headerFirst {
+					tag = "th"
+				}
+				sb = append(sb, []byte("<"+tag+">"+htmlEscape(text)+"</"+tag+">")...)
+			}
+			sb = append(sb, []byte("</tr>")...)
+		}
+		sb = append(sb, []byte("</table>")...)
+	}
+	sb = append(sb, []byte(`</body></html>`)...)
+	return string(sb)
+}
+
+// firstParagraphText returns the concatenated text content of the
+// paragraph's first run (and any direct text runs after it), enough
+// to show what a cell holds.
+func firstParagraphText(p *pb.Paragraph) string {
+	var out string
+	for _, pc := range p.Content {
+		if r := pc.GetRun(); r != nil {
+			for _, rc := range r.Content {
+				if t := rc.GetText(); t != nil {
+					out += t.Value
+				}
+			}
+		}
+	}
+	return out
+}
+
+// renderTypedTables projects a tables fixture's Body.Content as a
+// JSON tree, same shape as renderTypedBody but with table nodes.
+// Demonstrates the recursive-descent output: each Table carries
+// properties + grid, each cell holds block-level content.
+func renderTypedTables(doc *pb.DocxDocumentWithMetadata) string {
+	type leaf struct {
+		Kind string `json:"kind"`
+		Text string `json:"text,omitempty"`
+	}
+	type cellView struct {
+		GridSpan int32  `json:"grid_span,omitempty"`
+		WidthDxa int32  `json:"width_dxa,omitempty"`
+		Text     string `json:"text"`
+	}
+	type rowView struct {
+		Cells []cellView `json:"cells"`
+	}
+	type tableView struct {
+		StyleID  string    `json:"style_id,omitempty"`
+		WidthDxa int32     `json:"width_dxa,omitempty"`
+		Grid     []int32   `json:"grid_dxa,omitempty"`
+		Rows     []rowView `json:"rows"`
+	}
+	type block struct {
+		Kind  string     `json:"kind"` // paragraph | table
+		Text  string     `json:"text,omitempty"`
+		Table *tableView `json:"table,omitempty"`
+	}
+
+	var blocks []block
+	if doc.DocxPackage != nil && doc.DocxPackage.Document != nil && doc.DocxPackage.Document.Body != nil {
+		for _, be := range doc.DocxPackage.Document.Body.Content {
+			if p := be.GetParagraph(); p != nil {
+				blocks = append(blocks, block{Kind: "paragraph", Text: firstParagraphText(p)})
+				continue
+			}
+			tbl := be.GetTable()
+			if tbl == nil {
+				continue
+			}
+			tv := &tableView{}
+			if tbl.Properties != nil {
+				tv.StyleID = tbl.Properties.GetStyleId()
+				if tbl.Properties.Width != nil {
+					tv.WidthDxa = tbl.Properties.Width.W
+				}
+			}
+			if tbl.Grid != nil {
+				for _, c := range tbl.Grid.Columns {
+					tv.Grid = append(tv.Grid, c.W)
+				}
+			}
+			for _, rc := range tbl.Content {
+				row := rc.GetRow()
+				if row == nil {
+					continue
+				}
+				var rv rowView
+				for _, cc := range row.Content {
+					cell := cc.GetCell()
+					if cell == nil {
+						continue
+					}
+					var cv cellView
+					if cell.Properties != nil {
+						cv.GridSpan = cell.Properties.GridSpan
+						if cell.Properties.Width != nil {
+							cv.WidthDxa = cell.Properties.Width.W
+						}
+					}
+					for _, el := range cell.Content {
+						if p := el.GetParagraph(); p != nil {
+							cv.Text = firstParagraphText(p)
+							break
+						}
+					}
+					rv.Cells = append(rv.Cells, cv)
+				}
+				tv.Rows = append(tv.Rows, rv)
+			}
+			blocks = append(blocks, block{Kind: "table", Table: tv})
+		}
+	}
+	_ = leaf{}
+
+	b, _ := json.MarshalIndent(blocks, "", "  ")
+	return fmt.Sprintf(`<!doctype html>
+<html><head><meta charset="utf-8"><title>Typed Body.Content with Tables</title>
+<style>body{font-family:monospace;padding:24px}
+pre{background:#0f172a;color:#f8fafc;padding:16px;border-radius:6px;overflow:auto}</style>
+</head><body>
+<h1>DocxPackage.Document.Body.Content (paragraphs + tables)</h1>
 <pre>%s</pre>
 </body></html>`, htmlEscape(string(b)))
 }

@@ -133,6 +133,29 @@ func TestValidate(t *testing.T) {
 			if err != nil {
 				t.Errorf("d.Sections: %v", err)
 			}
+			// Tables fixture must surface at least one Table in the
+			// typed body tree.
+			if strings.Contains(rel, "12_tables") {
+				var tables []string
+				for _, e := range body.Content {
+					if tbl := e.GetTable(); tbl != nil {
+						tables = append(tables, "tbl")
+						if len(tbl.Content) == 0 {
+							t.Error("table has no rows")
+						}
+						for _, tc := range tbl.Content {
+							row := tc.GetRow()
+							if row == nil || len(row.Content) == 0 {
+								t.Error("table row has no cells")
+							}
+						}
+					}
+				}
+				if len(tables) == 0 {
+					t.Error("12_tables fixture surfaced no Table entries in body")
+				}
+			}
+
 			// Fixtures whose filenames imply headers/footers must
 			// surface at least one section with matching references.
 			if strings.Contains(rel, "10_headers_footers") || strings.Contains(rel, "11_kitchen_sink") {

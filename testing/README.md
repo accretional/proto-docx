@@ -50,6 +50,11 @@ All fixtures under `data/generated/` are built by
 | `09_footnotes_endnotes.docx` | `footnotes.xml` + `endnotes.xml`. |
 | `10_headers_footers.docx` | `header1.xml` / `footer1.xml` etc. |
 | `11_kitchen_sink.docx` | Combines every feature above. |
+| `12_tables.docx` | Two `<w:tbl>` tables — one with `<w:tblStyle>` and an explicit `<w:tblGrid>`, one with inferred grid. |
+
+Real-world DOCX files live at the top level of `data/`
+(e.g. `data/DOCX_TestPage.docx`, `data/sample-word-document.docx`) and
+are picked up by the walker automatically.
 
 ### Regenerating
 

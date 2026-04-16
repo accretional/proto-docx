@@ -604,6 +604,99 @@ func TestDecodeBodyTypedTreePreserveSpace(t *testing.T) {
 	}
 }
 
+// TestDecodeBodyTypedTreeTable covers the <w:tbl> branch of
+// parseBlockContainer: a 2×2 table with properties, grid, rows, cells,
+// and paragraph content inside each cell flows into the typed tree.
+func TestDecodeBodyTypedTreeTable(t *testing.T) {
+	var buf bytes.Buffer
+	w := zip.NewWriter(&buf)
+	f, _ := w.Create("word/document.xml")
+	_, _ = f.Write([]byte(
+		`<?xml version="1.0"?><w:document xmlns:w="http://w"><w:body>` +
+			`<w:p><w:r><w:t>before</w:t></w:r></w:p>` +
+			`<w:tbl>` +
+			`<w:tblPr><w:tblStyle w:val="TableGrid"/><w:tblW w:w="6000" w:type="dxa"/></w:tblPr>` +
+			`<w:tblGrid><w:gridCol w:w="3000"/><w:gridCol w:w="3000"/></w:tblGrid>` +
+			`<w:tr>` +
+			`<w:tc><w:tcPr><w:tcW w:w="3000" w:type="dxa"/><w:gridSpan w:val="1"/></w:tcPr>` +
+			`<w:p><w:r><w:t>A1</w:t></w:r></w:p></w:tc>` +
+			`<w:tc><w:tcPr><w:tcW w:w="3000" w:type="dxa"/></w:tcPr>` +
+			`<w:p><w:r><w:t>B1</w:t></w:r></w:p></w:tc>` +
+			`</w:tr>` +
+			`<w:tr>` +
+			`<w:tc><w:tcPr><w:tcW w:w="6000" w:type="dxa"/><w:gridSpan w:val="2"/></w:tcPr>` +
+			`<w:p><w:r><w:t>merged</w:t></w:r></w:p></w:tc>` +
+			`</w:tr>` +
+			`</w:tbl>` +
+			`<w:p><w:r><w:t>after</w:t></w:r></w:p>` +
+			`</w:body></w:document>`))
+	_ = w.Close()
+
+	doc, err := Decode(buf.Bytes())
+	if err != nil {
+		t.Fatalf("Decode: %v", err)
+	}
+	body := doc.DocxPackage.Document.Body
+	if len(body.Content) != 3 {
+		t.Fatalf("body.Content len = %d, want 3 (p, tbl, p)", len(body.Content))
+	}
+	if body.Content[0].GetParagraph() == nil {
+		t.Error("body.Content[0] is not a Paragraph")
+	}
+	tbl := body.Content[1].GetTable()
+	if tbl == nil {
+		t.Fatal("body.Content[1] is not a Table")
+	}
+	if got := tbl.Properties.GetStyleId(); got != "TableGrid" {
+		t.Errorf("tbl.Properties.StyleId = %q, want TableGrid", got)
+	}
+	if tbl.Properties.GetWidth().GetW() != 6000 {
+		t.Errorf("tbl width w = %d, want 6000", tbl.Properties.GetWidth().GetW())
+	}
+	if tbl.Properties.GetWidth().GetType() != pb.TableWidthType_TABLE_WIDTH_DXA {
+		t.Errorf("tbl width type = %v, want DXA", tbl.Properties.GetWidth().GetType())
+	}
+	if got := len(tbl.Grid.GetColumns()); got != 2 {
+		t.Errorf("grid columns = %d, want 2", got)
+	} else if tbl.Grid.Columns[0].GetW() != 3000 {
+		t.Errorf("grid col[0].w = %d, want 3000", tbl.Grid.Columns[0].GetW())
+	}
+	if len(tbl.Content) != 2 {
+		t.Fatalf("tbl.Content len = %d, want 2 rows", len(tbl.Content))
+	}
+	row0 := tbl.Content[0].GetRow()
+	if row0 == nil || len(row0.Content) != 2 {
+		t.Fatalf("row0 = %+v (want 2 cells)", row0)
+	}
+	cellA := row0.Content[0].GetCell()
+	if cellA == nil {
+		t.Fatal("row0[0] is not a Cell")
+	}
+	if cellA.Properties.GetWidth().GetW() != 3000 {
+		t.Errorf("cellA width = %d, want 3000", cellA.Properties.GetWidth().GetW())
+	}
+	if cellA.Properties.GetGridSpan() != 1 {
+		t.Errorf("cellA GridSpan = %d, want 1", cellA.Properties.GetGridSpan())
+	}
+	if len(cellA.Content) != 1 || cellA.Content[0].GetParagraph() == nil {
+		t.Fatalf("cellA.Content = %+v", cellA.Content)
+	}
+	if got := cellA.Content[0].GetParagraph().Content[0].GetRun().Content[0].GetText().Value; got != "A1" {
+		t.Errorf("cellA text = %q, want A1", got)
+	}
+	row1 := tbl.Content[1].GetRow()
+	merged := row1.Content[0].GetCell()
+	if merged.Properties.GetGridSpan() != 2 {
+		t.Errorf("merged GridSpan = %d, want 2", merged.Properties.GetGridSpan())
+	}
+	if got := merged.Content[0].GetParagraph().Content[0].GetRun().Content[0].GetText().Value; got != "merged" {
+		t.Errorf("merged text = %q, want merged", got)
+	}
+	if body.Content[2].GetParagraph() == nil {
+		t.Error("body.Content[2] is not a Paragraph")
+	}
+}
+
 func TestDecodeTrackedChanges(t *testing.T) {
 	var buf bytes.Buffer
 	w := zip.NewWriter(&buf)

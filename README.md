@@ -71,6 +71,20 @@ wrappers / leaves (text, deleted text, breaks, tabs) flowing into the
 proto schema so consumers can walk the document via the proto API
 instead of re-parsing the XML.
 
+![Tables fixture rendered](screenshots/docx-rendered-tables.png)
+
+*Figure 5.* The tables fixture (`data/generated/12_tables.docx`)
+rendered as HTML from the typed `Body.Content`. Headers and data rows
+are reconstructed from `Table → TableRow → TableCell` without
+re-parsing the OOXML.
+
+![Typed Body.Content with Tables](screenshots/docx-typed-tables.png)
+
+*Figure 6.* The same fixture as a JSON projection of the typed proto
+tree: `TableProperties.style_id` and `.width`, `TableGrid.columns`, and
+each `TableCell`'s width / grid-span surface on the proto fields that
+`parseTable` populates.
+
 Screenshots are regenerated automatically on every `./LET_IT_RIP.sh`
 run (placeholder PNGs if chromerpc isn't reachable). To force a regen
 manually:
@@ -178,16 +192,19 @@ is not introspectable via typed fields:
   `openformat.proto` and `pdf_document.proto` which aren't vendored
   here. Users that want typed-proto extraction can compose on top of
   the plain-Go returns.
-- **Typed-proto body population covers only the text-bearing subset.**
-  `Decode` now fills `DocxPackage.Document.Body.Content` with typed
-  `Paragraph` / `Run` / `TextContent` / `DeletedText` / `Break` / `Tab`
-  entries, plus `TrackedChangeInsertion` / `TrackedChangeDeletion`
-  wrappers carrying their `TrackedChangeInfo`. Everything outside that
-  subset — tables (`w:tbl`), hyperlinks, structured document tags
-  (`w:sdt`), bookmarks, field-char/instr runs, drawings, pictures,
-  and the long tail of `RunChild` variants — is still unpopulated in
-  the typed tree. Consumers that need them must walk the typed XML
-  tree on `Decoded.Document` (via `DecodeWith`) instead.
+- **Typed-proto body population covers the text-bearing subset plus
+  tables.** `Decode` now fills `DocxPackage.Document.Body.Content`
+  with typed `Paragraph` / `Run` / `TextContent` / `DeletedText` /
+  `Break` / `Tab` entries, plus `TrackedChangeInsertion` /
+  `TrackedChangeDeletion` wrappers carrying their `TrackedChangeInfo`,
+  and `Table` entries with `TableProperties` (style, width),
+  `TableGrid` columns, `TableRow`s, and `TableCell`s whose `.Content`
+  recursively holds block-level elements (nested paragraphs and
+  tables). Everything outside that subset — hyperlinks, structured
+  document tags (`w:sdt`), bookmarks, field-char/instr runs, drawings,
+  pictures, and the long tail of `RunChild` variants — is still
+  unpopulated in the typed tree. Consumers that need them must walk
+  the typed XML tree on `Decoded.Document` (via `DecodeWith`) instead.
 - **DOCX conformance class / version detection.** Strict vs.
   transitional OOXML isn't surfaced on `DocxDocumentWithMetadata`;
   callers have to inspect `Package.ContentTypes` themselves.

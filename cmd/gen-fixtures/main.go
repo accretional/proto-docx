@@ -120,6 +120,29 @@ func fixtures() []fixture {
 			},
 		},
 		{
+			name: "12_tables.docx",
+			spec: docxbuild.Spec{
+				Paragraphs: []string{"Tables below"},
+				Tables: []docxbuild.Table{
+					{
+						StyleID:  "TableGrid",
+						GridCols: []int32{3000, 3000, 3000},
+						Rows: [][]string{
+							{"Name", "Role", "City"},
+							{"Ada", "Mathematician", "London"},
+							{"Grace", "Admiral", "Arlington"},
+						},
+					},
+					{
+						// No explicit grid — inferred uniform split.
+						Rows: [][]string{
+							{"single-row", "two-column"},
+						},
+					},
+				},
+			},
+		},
+		{
 			name: "11_kitchen_sink.docx",
 			spec: docxbuild.Spec{
 				Paragraphs: []string{

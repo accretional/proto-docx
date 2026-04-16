@@ -118,17 +118,22 @@ func readZipFile(f *zip.File) ([]byte, error) {
 }
 
 // parseDocumentXML walks word/document.xml and builds the typed-proto
-// tree under DocxPackage.Document.Body: paragraphs, runs, text,
-// tracked-change wrappers, breaks, and tabs. Summary fields
+// tree under DocxPackage.Document.Body via recursive descent. It
+// populates block-level content (paragraphs + tables), tracked-change
+// wrappers, runs, text, breaks, and tabs. Summary fields
 // (ParagraphCount, HasTrackedChanges) are populated as a side effect.
 //
-// Scope is deliberately narrow — the text-bearing subset consumers
-// hit first: Paragraph → (Run | TrackedChangeInsertion |
-// TrackedChangeDeletion) → (TextContent | DeletedText | Break | Tab).
-// Tables, hyperlinks, SDTs, bookmarks, field runs, and the rest of the
-// ParagraphChild / RunChild oneofs are not yet modeled here; they are
-// still present in the raw-bytes path and surface via the typed
-// xmlcodec tree on DecodeWith.
+// Scope is the text-bearing subset consumers hit first:
+// Body → (Paragraph | Table) →
+//
+//	Paragraph → (Run | TrackedChangeInsertion | TrackedChangeDeletion) →
+//	            (TextContent | DeletedText | Break | Tab)
+//	Table     → (TableRow → TableCell → BlockLevelElement …) (recursive)
+//
+// Hyperlinks, SDTs, bookmarks, field runs, and the remaining
+// ParagraphChild / RunChild oneofs are not yet modeled here; they
+// remain on the raw-bytes path and surface via the typed xmlcodec tree
+// on DecodeWith.
 func parseDocumentXML(data []byte, doc *pb.DocxDocumentWithMetadata) {
 	body := &pb.Body{}
 	doc.DocxPackage.Document = &pb.Document{Body: body}
@@ -136,119 +141,469 @@ func parseDocumentXML(data []byte, doc *pb.DocxDocumentWithMetadata) {
 	dec := xml.NewDecoder(bytes.NewReader(data))
 	dec.Strict = false
 
-	var (
-		curPara    *pb.Paragraph
-		curRun     *pb.Run
-		curIns     *pb.TrackedChangeInsertion
-		curDel     *pb.TrackedChangeDeletion
-		curText    *pb.TextContent
-		curDelText *pb.DeletedText
-	)
-
-	// attachRunChild appends a finished Run to whichever container is
-	// currently open — a tracked-change wrapper if one is active, else
-	// the paragraph directly.
-	attachRun := func(r *pb.Run) {
-		child := &pb.ParagraphChild{Child: &pb.ParagraphChild_Run{Run: r}}
-		switch {
-		case curIns != nil:
-			curIns.Content = append(curIns.Content, child)
-		case curDel != nil:
-			curDel.Content = append(curDel.Content, child)
-		case curPara != nil:
-			curPara.Content = append(curPara.Content, child)
-		}
-	}
-
 	for {
 		tok, err := dec.Token()
 		if err != nil {
-			break
+			return
+		}
+		if se, ok := tok.(xml.StartElement); ok && se.Name.Local == "body" {
+			body.Content = parseBlockContainer(dec, se, doc)
+			return
+		}
+	}
+}
+
+// parseBlockContainer reads child tokens until the end-tag matching
+// `parent`, returning the block-level elements (paragraphs + tables)
+// found at this level. Unknown children are skipped via skipElement.
+// Used for both <w:body> and <w:tc> — table cells hold the same
+// BlockLevelElement list.
+func parseBlockContainer(dec *xml.Decoder, parent xml.StartElement, doc *pb.DocxDocumentWithMetadata) []*pb.BlockLevelElement {
+	var out []*pb.BlockLevelElement
+	for {
+		tok, err := dec.Token()
+		if err != nil {
+			return out
 		}
 		switch t := tok.(type) {
 		case xml.StartElement:
 			switch t.Name.Local {
 			case "p":
-				doc.ParagraphCount++
-				curPara = &pb.Paragraph{}
-			case "ins":
-				doc.HasTrackedChanges = true
-				curIns = &pb.TrackedChangeInsertion{Info: parseTrackedInfo(t)}
-			case "del":
-				doc.HasTrackedChanges = true
-				curDel = &pb.TrackedChangeDeletion{Info: parseTrackedInfo(t)}
-			case "r":
-				curRun = &pb.Run{}
-			case "t":
-				if curRun != nil {
-					curText = &pb.TextContent{PreserveSpace: hasPreserveSpace(t)}
-				}
-			case "delText":
-				if curRun != nil {
-					curDelText = &pb.DeletedText{PreserveSpace: hasPreserveSpace(t)}
-				}
-			case "br":
-				if curRun != nil {
-					curRun.Content = append(curRun.Content, &pb.RunChild{
-						Child: &pb.RunChild_Br{Br: &pb.Break{Type: parseBreakType(t)}},
-					})
-				}
-			case "tab":
-				if curRun != nil {
-					curRun.Content = append(curRun.Content, &pb.RunChild{
-						Child: &pb.RunChild_Tab{Tab: &pb.Tab{}},
-					})
-				}
-			}
-		case xml.CharData:
-			if curText != nil {
-				curText.Value += string(t)
-			} else if curDelText != nil {
-				curDelText.Value += string(t)
+				p := parseParagraph(dec, t, doc)
+				out = append(out, &pb.BlockLevelElement{
+					Element: &pb.BlockLevelElement_Paragraph{Paragraph: p},
+				})
+			case "tbl":
+				tbl := parseTable(dec, t, doc)
+				out = append(out, &pb.BlockLevelElement{
+					Element: &pb.BlockLevelElement_Table{Table: tbl},
+				})
+			default:
+				skipElement(dec, t)
 			}
 		case xml.EndElement:
+			if t.Name.Local == parent.Name.Local {
+				return out
+			}
+		}
+	}
+}
+
+// parseParagraph reads a <w:p> subtree and returns the populated
+// Paragraph. The paragraph's direct children are runs and tracked-
+// change wrappers; anything else (pPr, bookmarks, hyperlinks) is
+// skipped.
+func parseParagraph(dec *xml.Decoder, start xml.StartElement, doc *pb.DocxDocumentWithMetadata) *pb.Paragraph {
+	doc.ParagraphCount++
+	p := &pb.Paragraph{}
+	for {
+		tok, err := dec.Token()
+		if err != nil {
+			return p
+		}
+		switch t := tok.(type) {
+		case xml.StartElement:
+			switch t.Name.Local {
+			case "r":
+				r := parseRun(dec, t)
+				p.Content = append(p.Content, &pb.ParagraphChild{
+					Child: &pb.ParagraphChild_Run{Run: r},
+				})
+			case "ins":
+				doc.HasTrackedChanges = true
+				ins := parseTrackedInsertion(dec, t)
+				p.Content = append(p.Content, &pb.ParagraphChild{
+					Child: &pb.ParagraphChild_Ins{Ins: ins},
+				})
+			case "del":
+				doc.HasTrackedChanges = true
+				del := parseTrackedDeletion(dec, t)
+				p.Content = append(p.Content, &pb.ParagraphChild{
+					Child: &pb.ParagraphChild_Del{Del: del},
+				})
+			default:
+				skipElement(dec, t)
+			}
+		case xml.EndElement:
+			if t.Name.Local == start.Name.Local {
+				return p
+			}
+		}
+	}
+}
+
+// parseTrackedInsertion reads a <w:ins> subtree within a paragraph,
+// collecting runs as ParagraphChild entries on the wrapper.
+func parseTrackedInsertion(dec *xml.Decoder, start xml.StartElement) *pb.TrackedChangeInsertion {
+	ins := &pb.TrackedChangeInsertion{Info: parseTrackedInfo(start)}
+	for {
+		tok, err := dec.Token()
+		if err != nil {
+			return ins
+		}
+		switch t := tok.(type) {
+		case xml.StartElement:
+			if t.Name.Local == "r" {
+				r := parseRun(dec, t)
+				ins.Content = append(ins.Content, &pb.ParagraphChild{
+					Child: &pb.ParagraphChild_Run{Run: r},
+				})
+			} else {
+				skipElement(dec, t)
+			}
+		case xml.EndElement:
+			if t.Name.Local == start.Name.Local {
+				return ins
+			}
+		}
+	}
+}
+
+// parseTrackedDeletion reads a <w:del> subtree within a paragraph.
+func parseTrackedDeletion(dec *xml.Decoder, start xml.StartElement) *pb.TrackedChangeDeletion {
+	del := &pb.TrackedChangeDeletion{Info: parseTrackedInfo(start)}
+	for {
+		tok, err := dec.Token()
+		if err != nil {
+			return del
+		}
+		switch t := tok.(type) {
+		case xml.StartElement:
+			if t.Name.Local == "r" {
+				r := parseRun(dec, t)
+				del.Content = append(del.Content, &pb.ParagraphChild{
+					Child: &pb.ParagraphChild_Run{Run: r},
+				})
+			} else {
+				skipElement(dec, t)
+			}
+		case xml.EndElement:
+			if t.Name.Local == start.Name.Local {
+				return del
+			}
+		}
+	}
+}
+
+// parseRun reads a <w:r> subtree and returns the populated Run,
+// capturing text, tracked-delete text, breaks, and tabs.
+func parseRun(dec *xml.Decoder, start xml.StartElement) *pb.Run {
+	r := &pb.Run{}
+	for {
+		tok, err := dec.Token()
+		if err != nil {
+			return r
+		}
+		switch t := tok.(type) {
+		case xml.StartElement:
 			switch t.Name.Local {
 			case "t":
-				if curText != nil && curRun != nil {
-					curRun.Content = append(curRun.Content, &pb.RunChild{
-						Child: &pb.RunChild_Text{Text: curText},
-					})
-				}
-				curText = nil
+				text := parseTextContent(dec, t)
+				r.Content = append(r.Content, &pb.RunChild{
+					Child: &pb.RunChild_Text{Text: text},
+				})
 			case "delText":
-				if curDelText != nil && curRun != nil {
-					curRun.Content = append(curRun.Content, &pb.RunChild{
-						Child: &pb.RunChild_DelText{DelText: curDelText},
-					})
-				}
-				curDelText = nil
-			case "r":
-				if curRun != nil {
-					attachRun(curRun)
-				}
-				curRun = nil
-			case "ins":
-				if curIns != nil && curPara != nil {
-					curPara.Content = append(curPara.Content, &pb.ParagraphChild{
-						Child: &pb.ParagraphChild_Ins{Ins: curIns},
-					})
-				}
-				curIns = nil
-			case "del":
-				if curDel != nil && curPara != nil {
-					curPara.Content = append(curPara.Content, &pb.ParagraphChild{
-						Child: &pb.ParagraphChild_Del{Del: curDel},
-					})
-				}
-				curDel = nil
-			case "p":
-				if curPara != nil {
-					body.Content = append(body.Content, &pb.BlockLevelElement{
-						Element: &pb.BlockLevelElement_Paragraph{Paragraph: curPara},
-					})
-				}
-				curPara = nil
+				dt := parseDelText(dec, t)
+				r.Content = append(r.Content, &pb.RunChild{
+					Child: &pb.RunChild_DelText{DelText: dt},
+				})
+			case "br":
+				r.Content = append(r.Content, &pb.RunChild{
+					Child: &pb.RunChild_Br{Br: &pb.Break{Type: parseBreakType(t)}},
+				})
+				skipElement(dec, t)
+			case "tab":
+				r.Content = append(r.Content, &pb.RunChild{
+					Child: &pb.RunChild_Tab{Tab: &pb.Tab{}},
+				})
+				skipElement(dec, t)
+			default:
+				skipElement(dec, t)
 			}
+		case xml.EndElement:
+			if t.Name.Local == start.Name.Local {
+				return r
+			}
+		}
+	}
+}
+
+// parseTextContent reads the char-data under a <w:t> element into a
+// TextContent, honoring xml:space="preserve".
+func parseTextContent(dec *xml.Decoder, start xml.StartElement) *pb.TextContent {
+	tc := &pb.TextContent{PreserveSpace: hasPreserveSpace(start)}
+	for {
+		tok, err := dec.Token()
+		if err != nil {
+			return tc
+		}
+		switch t := tok.(type) {
+		case xml.CharData:
+			tc.Value += string(t)
+		case xml.StartElement:
+			skipElement(dec, t)
+		case xml.EndElement:
+			if t.Name.Local == start.Name.Local {
+				return tc
+			}
+		}
+	}
+}
+
+// parseDelText reads <w:delText> into a DeletedText.
+func parseDelText(dec *xml.Decoder, start xml.StartElement) *pb.DeletedText {
+	dt := &pb.DeletedText{PreserveSpace: hasPreserveSpace(start)}
+	for {
+		tok, err := dec.Token()
+		if err != nil {
+			return dt
+		}
+		switch t := tok.(type) {
+		case xml.CharData:
+			dt.Value += string(t)
+		case xml.StartElement:
+			skipElement(dec, t)
+		case xml.EndElement:
+			if t.Name.Local == start.Name.Local {
+				return dt
+			}
+		}
+	}
+}
+
+// parseTable reads a <w:tbl> subtree into a Table, capturing table
+// properties (style id, width), the table grid (column widths), and
+// rows with their cells and block-level content.
+func parseTable(dec *xml.Decoder, start xml.StartElement, doc *pb.DocxDocumentWithMetadata) *pb.Table {
+	tbl := &pb.Table{}
+	for {
+		tok, err := dec.Token()
+		if err != nil {
+			return tbl
+		}
+		switch t := tok.(type) {
+		case xml.StartElement:
+			switch t.Name.Local {
+			case "tblPr":
+				tbl.Properties = parseTableProperties(dec, t)
+			case "tblGrid":
+				tbl.Grid = parseTableGrid(dec, t)
+			case "tr":
+				row := parseTableRow(dec, t, doc)
+				tbl.Content = append(tbl.Content, &pb.TableChild{
+					Child: &pb.TableChild_Row{Row: row},
+				})
+			default:
+				skipElement(dec, t)
+			}
+		case xml.EndElement:
+			if t.Name.Local == start.Name.Local {
+				return tbl
+			}
+		}
+	}
+}
+
+// parseTableProperties extracts the subset of <w:tblPr> we currently
+// model: style id and logical width.
+func parseTableProperties(dec *xml.Decoder, start xml.StartElement) *pb.TableProperties {
+	props := &pb.TableProperties{}
+	for {
+		tok, err := dec.Token()
+		if err != nil {
+			return props
+		}
+		switch t := tok.(type) {
+		case xml.StartElement:
+			switch t.Name.Local {
+			case "tblStyle":
+				props.StyleId = attrVal(t, "val")
+				skipElement(dec, t)
+			case "tblW":
+				props.Width = parseTableWidth(t)
+				skipElement(dec, t)
+			default:
+				skipElement(dec, t)
+			}
+		case xml.EndElement:
+			if t.Name.Local == start.Name.Local {
+				return props
+			}
+		}
+	}
+}
+
+// parseTableGrid reads <w:tblGrid> and collects each <w:gridCol>'s
+// width attribute.
+func parseTableGrid(dec *xml.Decoder, start xml.StartElement) *pb.TableGrid {
+	grid := &pb.TableGrid{}
+	for {
+		tok, err := dec.Token()
+		if err != nil {
+			return grid
+		}
+		switch t := tok.(type) {
+		case xml.StartElement:
+			if t.Name.Local == "gridCol" {
+				col := &pb.TableGridColumn{}
+				if w, err := parseInt32(attrVal(t, "w")); err == nil {
+					col.W = w
+				}
+				grid.Columns = append(grid.Columns, col)
+			}
+			skipElement(dec, t)
+		case xml.EndElement:
+			if t.Name.Local == start.Name.Local {
+				return grid
+			}
+		}
+	}
+}
+
+// parseTableRow reads <w:tr>, capturing optional row properties and
+// the sequence of cells.
+func parseTableRow(dec *xml.Decoder, start xml.StartElement, doc *pb.DocxDocumentWithMetadata) *pb.TableRow {
+	row := &pb.TableRow{}
+	for {
+		tok, err := dec.Token()
+		if err != nil {
+			return row
+		}
+		switch t := tok.(type) {
+		case xml.StartElement:
+			switch t.Name.Local {
+			case "tc":
+				cell := parseTableCell(dec, t, doc)
+				row.Content = append(row.Content, &pb.TableRowChild{
+					Child: &pb.TableRowChild_Cell{Cell: cell},
+				})
+			default:
+				skipElement(dec, t)
+			}
+		case xml.EndElement:
+			if t.Name.Local == start.Name.Local {
+				return row
+			}
+		}
+	}
+}
+
+// parseTableCell reads <w:tc>, capturing optional cell properties and
+// recursing into parseBlockContainer for nested block-level content
+// (paragraphs + tables).
+func parseTableCell(dec *xml.Decoder, start xml.StartElement, doc *pb.DocxDocumentWithMetadata) *pb.TableCell {
+	cell := &pb.TableCell{}
+	for {
+		tok, err := dec.Token()
+		if err != nil {
+			return cell
+		}
+		switch t := tok.(type) {
+		case xml.StartElement:
+			switch t.Name.Local {
+			case "tcPr":
+				cell.Properties = parseTableCellProperties(dec, t)
+			case "p":
+				p := parseParagraph(dec, t, doc)
+				cell.Content = append(cell.Content, &pb.BlockLevelElement{
+					Element: &pb.BlockLevelElement_Paragraph{Paragraph: p},
+				})
+			case "tbl":
+				tbl := parseTable(dec, t, doc)
+				cell.Content = append(cell.Content, &pb.BlockLevelElement{
+					Element: &pb.BlockLevelElement_Table{Table: tbl},
+				})
+			default:
+				skipElement(dec, t)
+			}
+		case xml.EndElement:
+			if t.Name.Local == start.Name.Local {
+				return cell
+			}
+		}
+	}
+}
+
+// parseTableCellProperties extracts the subset of <w:tcPr> we model:
+// cell width and horizontal grid span.
+func parseTableCellProperties(dec *xml.Decoder, start xml.StartElement) *pb.TableCellProperties {
+	props := &pb.TableCellProperties{}
+	for {
+		tok, err := dec.Token()
+		if err != nil {
+			return props
+		}
+		switch t := tok.(type) {
+		case xml.StartElement:
+			switch t.Name.Local {
+			case "tcW":
+				props.Width = parseTableWidth(t)
+			case "gridSpan":
+				if n, err := parseInt32(attrVal(t, "val")); err == nil {
+					props.GridSpan = n
+				}
+			}
+			skipElement(dec, t)
+		case xml.EndElement:
+			if t.Name.Local == start.Name.Local {
+				return props
+			}
+		}
+	}
+}
+
+// parseTableWidth captures the <w:tblW> / <w:tcW> form: w:w (numeric
+// amount) + w:type (enum).
+func parseTableWidth(se xml.StartElement) *pb.TableWidth {
+	tw := &pb.TableWidth{}
+	for _, a := range se.Attr {
+		switch a.Name.Local {
+		case "w":
+			if n, err := parseInt32(a.Value); err == nil {
+				tw.W = n
+			}
+		case "type":
+			switch a.Value {
+			case "nil":
+				tw.Type = pb.TableWidthType_TABLE_WIDTH_NIL
+			case "auto":
+				tw.Type = pb.TableWidthType_TABLE_WIDTH_AUTO
+			case "dxa":
+				tw.Type = pb.TableWidthType_TABLE_WIDTH_DXA
+			case "pct":
+				tw.Type = pb.TableWidthType_TABLE_WIDTH_PCT
+			}
+		}
+	}
+	return tw
+}
+
+// attrVal returns the value of the named attribute (local-name match)
+// on the start element, or the empty string if absent.
+func attrVal(se xml.StartElement, local string) string {
+	for _, a := range se.Attr {
+		if a.Name.Local == local {
+			return a.Value
+		}
+	}
+	return ""
+}
+
+// skipElement consumes tokens until the matching end-element for `se`
+// is seen, discarding content. Used to ignore elements we don't yet
+// model without disrupting the recursive descent.
+func skipElement(dec *xml.Decoder, se xml.StartElement) {
+	depth := 1
+	for depth > 0 {
+		tok, err := dec.Token()
+		if err != nil {
+			return
+		}
+		switch tok.(type) {
+		case xml.StartElement:
+			depth++
+		case xml.EndElement:
+			depth--
 		}
 	}
 }
