@@ -13,14 +13,16 @@ doc, err := docxcodec.Decode(raw)   // raw is a .docx (ZIP of XML parts)
 // ... inspect doc.DocxPackage, doc.ParagraphCount, doc.HasTrackedChanges ...
 out, _ := docxcodec.Encode(doc)     // byte-identical round-trip via RawBytes
 
-text, _ := docxcodec.ExtractText(raw)   // paragraph text, one per line
-fonts, _ := docxcodec.ExtractFonts(raw) // font family names from fontTable.xml
+text, _ := docxcodec.ExtractText(raw)     // paragraph text, one per line
+fonts, _ := docxcodec.ExtractFonts(raw)   // font family names from fontTable.xml
+secs, _ := docxcodec.ExtractSections(raw) // page size, margins, cols, header/footer refs
 
 // Or for richer access (typed XML tree + extraction methods in one object):
 d, _ := docxcodec.DecodeWith(raw, docxcodec.DecodeOptions{IncludeTypedParts: true})
 _ = d.Document    // *XmlDocumentWithMetadata for word/document.xml
 _ = d.Text()      // same as ExtractText
 _ = d.Fonts()     // same as ExtractFonts
+_ = d.Sections()  // same as ExtractSections
 _ = d.Images()    // doc.DocxPackage.MediaParts, as a convenience
 ```
 
@@ -148,15 +150,15 @@ is not introspectable via typed fields:
   byte-different output silently returns the original bytes. A real
   encoder needs the full OOXML schema covered, which is deliberately
   out of scope for this cut.
-- **Extraction APIs are partially ported.** `ExtractText`,
-  `ExtractFonts`, and the `Decoded.Text()` / `.Fonts()` / `.Images()`
-  methods now cover the high-traffic surface. `ExtractSections`
-  (section-property walks over `<w:sectPr>`) is still unported —
-  worthwhile for paginated/multi-section documents. The mime-proto
-  versions return typed proto messages; ours return plain Go values
-  (`string`, `[]string`, `[]*MediaPart`) because the richer return
-  types depend on `openformat.proto` / `pdf_document.proto` which
-  aren't vendored here.
+- **Extraction APIs return plain Go values, not typed protos.**
+  `ExtractText`, `ExtractFonts`, `ExtractSections`, and their
+  `Decoded.Text() / .Fonts() / .Sections() / .Images()` method forms
+  cover the extraction surface. The mime-proto versions return typed
+  proto messages; ours return `string`, `[]string`, `[]Section`, and
+  `[]*MediaPart` because the richer return types depend on
+  `openformat.proto` and `pdf_document.proto` which aren't vendored
+  here. Users that want typed-proto extraction can compose on top of
+  the plain-Go returns.
 - **Typed XML parts beyond `word/document.xml` still require manual
   unzipping.** `docxcodec.DecodeWith(raw, DecodeOptions{IncludeTypedParts: true})`
   now hands `word/document.xml` to `proto-xml`'s `xmlcodec.Decode` and

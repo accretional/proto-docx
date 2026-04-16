@@ -5,6 +5,7 @@ import (
 	"bytes"
 	"encoding/xml"
 	"fmt"
+	"strconv"
 	"strings"
 
 	pb "openformat-docx/gen/go/openformat/v1"
@@ -151,6 +152,173 @@ func extractTextFromDocumentXML(data []byte) string {
 		}
 	}
 	return strings.Join(paragraphs, "\n")
+}
+
+// Section summarises one <w:sectPr> block from word/document.xml:
+// page dimensions, margins, column count, and references to header /
+// footer parts.
+//
+// All numeric fields are in OOXML twips (1 inch = 1440 twips). Zero
+// means the attribute was absent from the source — callers should
+// treat zero as "use the Word default" (US Letter, one-inch margins,
+// single column) rather than a literal zero.
+type Section struct {
+	PageWidth    int64  // <w:pgSz w:w="...">
+	PageHeight   int64  // <w:pgSz w:h="...">
+	Orientation  string // <w:pgSz w:orient="portrait|landscape">
+	MarginTop    int64  // <w:pgMar w:top="...">
+	MarginRight  int64  // <w:pgMar w:right="...">
+	MarginBottom int64  // <w:pgMar w:bottom="...">
+	MarginLeft   int64  // <w:pgMar w:left="...">
+	Columns      int32  // <w:cols w:num="..."> (zero = unset, Word defaults to 1)
+	HeaderRefs   []HeaderFooterRef
+	FooterRefs   []HeaderFooterRef
+}
+
+// HeaderFooterRef points at a header / footer part via an OPC
+// relationship id (<w:headerReference r:id="..." w:type="default|first|even"/>).
+type HeaderFooterRef struct {
+	Type  string // "default", "first", "even"
+	RelId string
+}
+
+// ExtractSections returns the section-property blocks from
+// word/document.xml in source order. A sectPr appearing in <w:pPr>
+// marks a section break at that paragraph; a final sectPr as a direct
+// child of <w:body> applies to the last section.
+//
+// A valid .docx always has at least one section; an empty result
+// slice means word/document.xml is absent or has no sectPr element.
+func ExtractSections(raw []byte) ([]Section, error) {
+	if len(raw) == 0 {
+		return nil, fmt.Errorf("docxcodec: empty input")
+	}
+	zr, err := zip.NewReader(bytes.NewReader(raw), int64(len(raw)))
+	if err != nil {
+		return nil, fmt.Errorf("docxcodec: open zip: %w", err)
+	}
+	for _, f := range zr.File {
+		if f.Name != "word/document.xml" {
+			continue
+		}
+		data, err := readZipFile(f)
+		if err != nil {
+			return nil, fmt.Errorf("docxcodec: read word/document.xml: %w", err)
+		}
+		return extractSectionsFromDocumentXML(data), nil
+	}
+	return nil, nil
+}
+
+// Sections is the method form of ExtractSections.
+func (d *Decoded) Sections() ([]Section, error) {
+	if d == nil || d.DocxDocumentWithMetadata == nil || len(d.RawBytes) == 0 {
+		return nil, nil
+	}
+	return ExtractSections(d.RawBytes)
+}
+
+func extractSectionsFromDocumentXML(data []byte) []Section {
+	dec := xml.NewDecoder(bytes.NewReader(data))
+	dec.Strict = false
+
+	var (
+		sections []Section
+		cur      *Section
+	)
+	for {
+		tok, err := dec.Token()
+		if err != nil {
+			break
+		}
+		switch t := tok.(type) {
+		case xml.StartElement:
+			switch t.Name.Local {
+			case "sectPr":
+				sections = append(sections, Section{})
+				cur = &sections[len(sections)-1]
+
+			case "pgSz":
+				if cur == nil {
+					continue
+				}
+				for _, a := range t.Attr {
+					switch a.Name.Local {
+					case "w":
+						cur.PageWidth = parseTwip(a.Value)
+					case "h":
+						cur.PageHeight = parseTwip(a.Value)
+					case "orient":
+						cur.Orientation = a.Value
+					}
+				}
+
+			case "pgMar":
+				if cur == nil {
+					continue
+				}
+				for _, a := range t.Attr {
+					switch a.Name.Local {
+					case "top":
+						cur.MarginTop = parseTwip(a.Value)
+					case "right":
+						cur.MarginRight = parseTwip(a.Value)
+					case "bottom":
+						cur.MarginBottom = parseTwip(a.Value)
+					case "left":
+						cur.MarginLeft = parseTwip(a.Value)
+					}
+				}
+
+			case "cols":
+				if cur == nil {
+					continue
+				}
+				for _, a := range t.Attr {
+					if a.Name.Local == "num" {
+						cur.Columns = int32(parseTwip(a.Value))
+					}
+				}
+
+			case "headerReference", "footerReference":
+				if cur == nil {
+					continue
+				}
+				ref := HeaderFooterRef{}
+				for _, a := range t.Attr {
+					switch a.Name.Local {
+					case "type":
+						ref.Type = a.Value
+					case "id":
+						ref.RelId = a.Value
+					}
+				}
+				if t.Name.Local == "headerReference" {
+					cur.HeaderRefs = append(cur.HeaderRefs, ref)
+				} else {
+					cur.FooterRefs = append(cur.FooterRefs, ref)
+				}
+			}
+
+		case xml.EndElement:
+			if t.Name.Local == "sectPr" {
+				cur = nil
+			}
+		}
+	}
+	return sections
+}
+
+// parseTwip parses an OOXML integer attribute value (twips, column
+// count, etc.). Returns 0 on parse failure — OOXML uses zero to mean
+// "use default" for most of these fields, so silent-zero matches the
+// schema's own convention.
+func parseTwip(s string) int64 {
+	n, err := strconv.ParseInt(s, 10, 64)
+	if err != nil {
+		return 0
+	}
+	return n
 }
 
 // extractFontsFromFontTableXML walks fontTable.xml and collects every

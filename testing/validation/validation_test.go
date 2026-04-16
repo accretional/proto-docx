@@ -113,6 +113,9 @@ func TestValidate(t *testing.T) {
 			if _, err := d.Fonts(); err != nil {
 				t.Errorf("d.Fonts: %v", err)
 			}
+			if _, err := d.Sections(); err != nil {
+				t.Errorf("d.Sections: %v", err)
+			}
 		})
 	}
 }

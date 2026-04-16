@@ -283,6 +283,79 @@ func TestExtractFonts(t *testing.T) {
 	}
 }
 
+func TestExtractSectionsSimple(t *testing.T) {
+	// One sectPr at the end of body, with page size, margins, cols, and
+	// one header and footer reference.
+	var buf bytes.Buffer
+	w := zip.NewWriter(&buf)
+	f, _ := w.Create("word/document.xml")
+	_, _ = f.Write([]byte(
+		`<?xml version="1.0"?><w:document xmlns:w="http://w" xmlns:r="http://r"><w:body>` +
+			`<w:p><w:r><w:t>body</w:t></w:r></w:p>` +
+			`<w:sectPr>` +
+			`<w:headerReference w:type="default" r:id="rId10"/>` +
+			`<w:footerReference w:type="default" r:id="rId11"/>` +
+			`<w:pgSz w:w="12240" w:h="15840" w:orient="portrait"/>` +
+			`<w:pgMar w:top="1440" w:right="1800" w:bottom="1440" w:left="1800"/>` +
+			`<w:cols w:num="2"/>` +
+			`</w:sectPr>` +
+			`</w:body></w:document>`))
+	_ = w.Close()
+
+	secs, err := ExtractSections(buf.Bytes())
+	if err != nil {
+		t.Fatalf("ExtractSections: %v", err)
+	}
+	if len(secs) != 1 {
+		t.Fatalf("len(secs) = %d, want 1", len(secs))
+	}
+	s := secs[0]
+	if s.PageWidth != 12240 || s.PageHeight != 15840 {
+		t.Errorf("page size = %dx%d, want 12240x15840", s.PageWidth, s.PageHeight)
+	}
+	if s.Orientation != "portrait" {
+		t.Errorf("orientation = %q, want portrait", s.Orientation)
+	}
+	if s.MarginTop != 1440 || s.MarginBottom != 1440 || s.MarginLeft != 1800 || s.MarginRight != 1800 {
+		t.Errorf("margins = %+v", s)
+	}
+	if s.Columns != 2 {
+		t.Errorf("columns = %d, want 2", s.Columns)
+	}
+	if len(s.HeaderRefs) != 1 || s.HeaderRefs[0].RelId != "rId10" || s.HeaderRefs[0].Type != "default" {
+		t.Errorf("HeaderRefs = %+v", s.HeaderRefs)
+	}
+	if len(s.FooterRefs) != 1 || s.FooterRefs[0].RelId != "rId11" || s.FooterRefs[0].Type != "default" {
+		t.Errorf("FooterRefs = %+v", s.FooterRefs)
+	}
+}
+
+func TestExtractSectionsMultipleBreaks(t *testing.T) {
+	// Two sections: one break in a paragraph's <w:pPr>, and the trailing
+	// body-level sectPr. Expect two entries in source order.
+	var buf bytes.Buffer
+	w := zip.NewWriter(&buf)
+	f, _ := w.Create("word/document.xml")
+	_, _ = f.Write([]byte(
+		`<?xml version="1.0"?><w:document xmlns:w="http://w"><w:body>` +
+			`<w:p><w:pPr><w:sectPr><w:pgSz w:w="11906" w:h="16838"/></w:sectPr></w:pPr><w:r><w:t>part1</w:t></w:r></w:p>` +
+			`<w:p><w:r><w:t>part2</w:t></w:r></w:p>` +
+			`<w:sectPr><w:pgSz w:w="12240" w:h="15840"/></w:sectPr>` +
+			`</w:body></w:document>`))
+	_ = w.Close()
+
+	secs, err := ExtractSections(buf.Bytes())
+	if err != nil {
+		t.Fatalf("ExtractSections: %v", err)
+	}
+	if len(secs) != 2 {
+		t.Fatalf("len(secs) = %d, want 2", len(secs))
+	}
+	if secs[0].PageWidth != 11906 || secs[1].PageWidth != 12240 {
+		t.Errorf("section widths = %d, %d — want 11906, 12240", secs[0].PageWidth, secs[1].PageWidth)
+	}
+}
+
 func TestDecodedAccessors(t *testing.T) {
 	raw := minimalDocx(t)
 	d, err := DecodeWith(raw, DecodeOptions{IncludeTypedParts: true})
@@ -310,6 +383,15 @@ func TestDecodedAccessors(t *testing.T) {
 	// minimalDocx has no media parts either.
 	if imgs := d.Images(); imgs != nil {
 		t.Errorf("d.Images = %v, want nil", imgs)
+	}
+
+	// minimalDocx omits sectPr entirely, so Sections returns empty.
+	secs, err := d.Sections()
+	if err != nil {
+		t.Fatalf("d.Sections: %v", err)
+	}
+	if len(secs) != 0 {
+		t.Errorf("d.Sections = %v, want []", secs)
 	}
 }
 
