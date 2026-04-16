@@ -193,22 +193,28 @@ is not introspectable via typed fields:
   here. Users that want typed-proto extraction can compose on top of
   the plain-Go returns.
 - **Typed-proto body population covers the text-bearing subset plus
-  tables, hyperlinks, and bookmarks.** `Decode` now fills
-  `DocxPackage.Document.Body.Content` with typed `Paragraph` / `Run` /
-  `TextContent` / `DeletedText` / `Break` / `Tab` entries, plus
-  `TrackedChangeInsertion` / `TrackedChangeDeletion` wrappers carrying
-  their `TrackedChangeInfo`, `Hyperlink` entries (with `r:id`,
-  `w:anchor`, `w:docLocation`, `w:history`, `w:tooltip`) whose nested
-  runs recurse through the same `ParagraphChild` list,
+  tables, hyperlinks, bookmarks, and structured document tags.**
+  `Decode` now fills `DocxPackage.Document.Body.Content` with typed
+  `Paragraph` / `Run` / `TextContent` / `DeletedText` / `Break` / `Tab`
+  entries, plus `TrackedChangeInsertion` / `TrackedChangeDeletion`
+  wrappers carrying their `TrackedChangeInfo`, `Hyperlink` entries
+  (with `r:id`, `w:anchor`, `w:docLocation`, `w:history`, `w:tooltip`)
+  whose nested runs recurse through the same `ParagraphChild` list,
   `BookmarkStart` / `BookmarkEnd` markers (id, name, colFirst/colLast
-  on start, id on end), and `Table` entries with `TableProperties`
-  (style, width), `TableGrid` columns, `TableRow`s, and `TableCell`s
-  whose `.Content` recursively holds block-level elements (nested
-  paragraphs and tables). Everything outside that subset — structured
-  document tags (`w:sdt`), field-char/instr runs, drawings, pictures,
-  and the long tail of `RunChild` variants — is still unpopulated in
-  the typed tree. Consumers that need them must walk the typed XML
-  tree on `Decoded.Document` (via `DecodeWith`) instead.
+  on start, id on end), `StructuredDocumentTag` (`w:sdt`) at both
+  block level (child of body/cell, `SdtContentBlock` recursing via
+  `parseBlockContainer`) and run level (child of paragraph,
+  `SdtContentRun` recursing via `parseParagraphChildren`) — with
+  `alias`, `tag`, `id`, `lock` / `locking`, `showingPlcHdr`, and
+  `temporary` lifted onto `SdtProperties` — and `Table` entries with
+  `TableProperties` (style, width), `TableGrid` columns, `TableRow`s,
+  and `TableCell`s whose `.Content` recursively holds block-level
+  elements (nested paragraphs and tables). Everything outside that
+  subset — field-char/instr runs (`w:fldChar`, `w:instrText`),
+  drawings, pictures, custom XML, and the long tail of `RunChild`
+  variants — is still unpopulated in the typed tree. Consumers that
+  need them must walk the typed XML tree on `Decoded.Document` (via
+  `DecodeWith`) instead.
 - **DOCX conformance class / version detection.** Strict vs.
   transitional OOXML isn't surfaced on `DocxDocumentWithMetadata`;
   callers have to inspect `Package.ContentTypes` themselves.

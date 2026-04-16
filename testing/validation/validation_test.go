@@ -185,6 +185,31 @@ func TestValidate(t *testing.T) {
 				}
 			}
 
+			// SDT fixture must surface at least one block-level SDT
+			// (direct child of Body) and one run-level SDT (child of a
+			// paragraph) in the typed tree.
+			if strings.Contains(rel, "14_sdt") {
+				var blockSdts, runSdts int
+				for _, e := range body.Content {
+					if e.GetSdt() != nil {
+						blockSdts++
+					}
+					if p := e.GetParagraph(); p != nil {
+						for _, c := range p.Content {
+							if c.GetSdt() != nil {
+								runSdts++
+							}
+						}
+					}
+				}
+				if blockSdts == 0 {
+					t.Error("expected ≥1 block-level Sdt, got none")
+				}
+				if runSdts == 0 {
+					t.Error("expected ≥1 run-level Sdt, got none")
+				}
+			}
+
 			// Fixtures whose filenames imply headers/footers must
 			// surface at least one section with matching references.
 			if strings.Contains(rel, "10_headers_footers") || strings.Contains(rel, "11_kitchen_sink") {

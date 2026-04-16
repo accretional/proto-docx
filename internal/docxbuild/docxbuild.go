@@ -28,6 +28,8 @@ type Spec struct {
 	Tables        []Table     // each appended to the body after paragraphs
 	Hyperlinks    []Hyperlink // each wrapped in its own <w:p>
 	Bookmarks     []Bookmark  // each wrapped in its own <w:p>
+	BlockSdts     []BlockSdt  // each emitted as a body-level <w:sdt>
+	RunSdts       []RunSdt    // each emitted inside its own <w:p>
 }
 
 // Image is a single media part embedded under word/media/.
@@ -55,6 +57,24 @@ type Bookmark struct {
 	ID   int32  // w:id on both start and end
 	Name string // w:name on start
 	Text string // run text inside the bookmark pair
+}
+
+// BlockSdt is a body-level <w:sdt> whose <w:sdtContent> holds one
+// paragraph with the given Text. Alias / Tag / ID populate <w:sdtPr>.
+type BlockSdt struct {
+	Alias string // w:alias w:val
+	Tag   string // w:tag w:val
+	ID    int32  // w:id w:val
+	Text  string // text of the single paragraph inside sdtContent
+}
+
+// RunSdt is a run-level <w:sdt> wrapped in its own <w:p>, whose
+// <w:sdtContent> holds one run with the given Text.
+type RunSdt struct {
+	Alias string // w:alias w:val
+	Tag   string // w:tag w:val
+	ID    int32  // w:id w:val
+	Text  string // run text inside sdtContent
 }
 
 // Table is a rectangular table spec consumed by buildTable. Each cell
@@ -231,6 +251,12 @@ func buildDocument(s Spec) string {
 	for _, b := range s.Bookmarks {
 		sb.WriteString(buildBookmarkParagraph(b))
 	}
+	for _, bsdt := range s.BlockSdts {
+		sb.WriteString(buildBlockSdt(bsdt))
+	}
+	for _, rsdt := range s.RunSdts {
+		sb.WriteString(buildRunSdt(rsdt))
+	}
 	sb.WriteString(buildSectPr(s))
 	sb.WriteString(`</w:body></w:document>`)
 	return sb.String()
@@ -295,6 +321,38 @@ func buildBookmarkParagraph(b Bookmark) string {
 		`<w:p><w:bookmarkStart w:id="%d" w:name="%s"/><w:r><w:t>%s</w:t></w:r><w:bookmarkEnd w:id="%d"/></w:p>`,
 		b.ID, escape(b.Name), escape(b.Text), b.ID,
 	)
+}
+
+// sdtPrBlock emits <w:sdtPr> with the alias/tag/id attributes set.
+func sdtPrBlock(alias, tag string, id int32) string {
+	var sb strings.Builder
+	sb.WriteString(`<w:sdtPr>`)
+	if alias != "" {
+		sb.WriteString(`<w:alias w:val="` + escape(alias) + `"/>`)
+	}
+	if tag != "" {
+		sb.WriteString(`<w:tag w:val="` + escape(tag) + `"/>`)
+	}
+	if id != 0 {
+		sb.WriteString(fmt.Sprintf(`<w:id w:val="%d"/>`, id))
+	}
+	sb.WriteString(`</w:sdtPr>`)
+	return sb.String()
+}
+
+// buildBlockSdt emits a body-level <w:sdt> with one paragraph inside
+// <w:sdtContent>.
+func buildBlockSdt(b BlockSdt) string {
+	return `<w:sdt>` + sdtPrBlock(b.Alias, b.Tag, b.ID) +
+		`<w:sdtContent>` + paragraph(b.Text) + `</w:sdtContent></w:sdt>`
+}
+
+// buildRunSdt emits a paragraph containing a run-level <w:sdt> whose
+// <w:sdtContent> wraps one run.
+func buildRunSdt(r RunSdt) string {
+	return `<w:p><w:sdt>` + sdtPrBlock(r.Alias, r.Tag, r.ID) +
+		`<w:sdtContent><w:r><w:t>` + escape(r.Text) + `</w:t></w:r></w:sdtContent>` +
+		`</w:sdt></w:p>`
 }
 
 // buildTable emits a <w:tbl> for the given Table spec. If t.GridCols is

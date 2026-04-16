@@ -183,11 +183,26 @@ query without re-parsing the OOXML.
 
 The typed-body population also now covers `<w:hyperlink>` (lifting
 `r:id`, `w:anchor`, `w:docLocation`, `w:history`, `w:tooltip`, and
-recursing through nested runs) and `<w:bookmarkStart>` /
+recursing through nested runs), `<w:bookmarkStart>` /
 `<w:bookmarkEnd>` markers (lifting `w:id`, `w:name`, `w:colFirst`,
-`w:colLast`). See `data/generated/13_hyperlinks_bookmarks.docx` and
+`w:colLast`), and `<w:sdt>` structured document tags at both block
+level (child of `<w:body>` / `<w:tc>`) and run level (child of
+`<w:p>`), with `alias` / `tag` / `id` / `lock` / `showingPlcHdr` /
+`temporary` lifted onto `SdtProperties` and nested content recursing
+through the same block- or paragraph-child walker. See
+`data/generated/13_hyperlinks_bookmarks.docx`,
+`data/generated/14_sdt.docx`, and the
 `TestDecodeBodyTypedTreeHyperlink` / `TestDecodeBodyTypedTreeBookmarks`
-for the round-trip assertions.
+/ `TestDecodeBodyTypedTreeSdtBlock` / `TestDecodeBodyTypedTreeSdtRun`
+assertions for coverage.
+
+Paragraph counting was also hardened: `ParagraphCount` is now
+computed up-front from the raw `word/document.xml` via
+`countXMLElements(data, "p")` rather than incremented by the typed
+walker — so paragraphs inside wrappers the walker doesn't model (e.g.
+`<mc:AlternateContent>` → `<w:drawing>` → `<wps:txbx>` →
+`<w:txbxContent>` in `data/DOCX_TestPage.docx`) still count. Surfaced
+by the gluon experiment; see `gluon/RESULTS.md`.
 
 ## Where to go next
 

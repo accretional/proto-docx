@@ -796,6 +796,109 @@ func TestDecodeBodyTypedTreeBookmarks(t *testing.T) {
 	}
 }
 
+// TestDecodeBodyTypedTreeSdtBlock covers a body-level <w:sdt> whose
+// <w:sdtContent> wraps one paragraph. sdt_pr attributes (alias, tag,
+// id) must flow onto SdtProperties; the nested paragraph must land on
+// SdtContentBlock.
+func TestDecodeBodyTypedTreeSdtBlock(t *testing.T) {
+	var buf bytes.Buffer
+	w := zip.NewWriter(&buf)
+	f, _ := w.Create("word/document.xml")
+	_, _ = f.Write([]byte(
+		`<?xml version="1.0"?><w:document xmlns:w="http://w"><w:body>` +
+			`<w:sdt>` +
+			`<w:sdtPr>` +
+			`<w:alias w:val="Title"/>` +
+			`<w:tag w:val="DocTitle"/>` +
+			`<w:id w:val="101"/>` +
+			`<w:lock w:val="sdtLocked"/>` +
+			`<w:showingPlcHdr/>` +
+			`</w:sdtPr>` +
+			`<w:sdtContent><w:p><w:r><w:t>inside</w:t></w:r></w:p></w:sdtContent>` +
+			`</w:sdt>` +
+			`</w:body></w:document>`))
+	_ = w.Close()
+
+	doc, err := Decode(buf.Bytes())
+	if err != nil {
+		t.Fatalf("Decode: %v", err)
+	}
+	body := doc.DocxPackage.Document.Body
+	if len(body.Content) != 1 {
+		t.Fatalf("body.Content len = %d, want 1", len(body.Content))
+	}
+	sdt := body.Content[0].GetSdt()
+	if sdt == nil {
+		t.Fatal("body.Content[0] is not an Sdt")
+	}
+	if sdt.SdtPr == nil {
+		t.Fatal("SdtPr nil")
+	}
+	if sdt.SdtPr.Alias != "Title" || sdt.SdtPr.Tag != "DocTitle" || sdt.SdtPr.Id != 101 {
+		t.Errorf("SdtPr = %+v", sdt.SdtPr)
+	}
+	if !sdt.SdtPr.Lock {
+		t.Error("Lock = false, want true")
+	}
+	if sdt.SdtPr.Locking != pb.SdtLockingValue_SDT_LOCK_SDT_LOCKED {
+		t.Errorf("Locking = %v, want SDT_LOCK_SDT_LOCKED", sdt.SdtPr.Locking)
+	}
+	if !sdt.SdtPr.ShowingPlaceholder {
+		t.Error("ShowingPlaceholder = false, want true")
+	}
+	block := sdt.GetSdtContentBlock()
+	if block == nil {
+		t.Fatal("Content is not SdtContentBlock")
+	}
+	if len(block.Content) != 1 || block.Content[0].GetParagraph() == nil {
+		t.Fatalf("SdtContentBlock.Content = %+v", block.Content)
+	}
+	if got := block.Content[0].GetParagraph().Content[0].GetRun().Content[0].GetText().Value; got != "inside" {
+		t.Errorf("sdt inner text = %q, want inside", got)
+	}
+
+	// Paragraph inside sdtContent must still count.
+	if got, want := doc.ParagraphCount, int32(1); got != want {
+		t.Errorf("ParagraphCount = %d, want %d", got, want)
+	}
+}
+
+// TestDecodeBodyTypedTreeSdtRun covers a run-level <w:sdt> inside a
+// paragraph. The sdt must land on ParagraphChild_Sdt with
+// SdtContentRun holding the inner run.
+func TestDecodeBodyTypedTreeSdtRun(t *testing.T) {
+	var buf bytes.Buffer
+	w := zip.NewWriter(&buf)
+	f, _ := w.Create("word/document.xml")
+	_, _ = f.Write([]byte(
+		`<?xml version="1.0"?><w:document xmlns:w="http://w"><w:body>` +
+			`<w:p><w:sdt>` +
+			`<w:sdtPr><w:alias w:val="Author"/><w:tag w:val="AuthorName"/><w:id w:val="202"/></w:sdtPr>` +
+			`<w:sdtContent><w:r><w:t>Ada</w:t></w:r></w:sdtContent>` +
+			`</w:sdt></w:p>` +
+			`</w:body></w:document>`))
+	_ = w.Close()
+
+	doc, err := Decode(buf.Bytes())
+	if err != nil {
+		t.Fatalf("Decode: %v", err)
+	}
+	sdt := doc.DocxPackage.Document.Body.Content[0].GetParagraph().Content[0].GetSdt()
+	if sdt == nil {
+		t.Fatal("expected ParagraphChild_Sdt")
+	}
+	if sdt.SdtPr.Alias != "Author" || sdt.SdtPr.Tag != "AuthorName" || sdt.SdtPr.Id != 202 {
+		t.Errorf("SdtPr = %+v", sdt.SdtPr)
+	}
+	run := sdt.GetSdtContentRun()
+	if run == nil {
+		t.Fatal("Content is not SdtContentRun")
+	}
+	if got := run.Content[0].GetRun().Content[0].GetText().Value; got != "Ada" {
+		t.Errorf("sdt run text = %q, want Ada", got)
+	}
+}
+
 // TestDecodeParagraphCountCountsAlternateContent guards against the
 // undercount regression surfaced by the gluon experiment on
 // DOCX_TestPage.docx: paragraphs inside <mc:AlternateContent> and

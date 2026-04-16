@@ -124,16 +124,20 @@ func readZipFile(f *zip.File) ([]byte, error) {
 // (ParagraphCount, HasTrackedChanges) are populated as a side effect.
 //
 // Scope is the text-bearing subset consumers hit first:
-// Body → (Paragraph | Table) →
+// Body → (Paragraph | Table | StructuredDocumentTag) →
 //
-//	Paragraph → (Run | TrackedChangeInsertion | TrackedChangeDeletion) →
+//	Paragraph → (Run | Hyperlink | BookmarkStart | BookmarkEnd |
+//	             TrackedChangeInsertion | TrackedChangeDeletion |
+//	             StructuredDocumentTag) →
 //	            (TextContent | DeletedText | Break | Tab)
 //	Table     → (TableRow → TableCell → BlockLevelElement …) (recursive)
+//	Sdt       → (SdtContentBlock → BlockLevelElement …) or
+//	            (SdtContentRun   → ParagraphChild    …) (recursive)
 //
-// Hyperlinks, SDTs, bookmarks, field runs, and the remaining
-// ParagraphChild / RunChild oneofs are not yet modeled here; they
-// remain on the raw-bytes path and surface via the typed xmlcodec tree
-// on DecodeWith.
+// Field runs (fldChar/instrText), drawings, pictures, and the
+// remaining ParagraphChild / RunChild oneofs are not yet modeled
+// here; they remain on the raw-bytes path and surface via the typed
+// xmlcodec tree on DecodeWith.
 func parseDocumentXML(data []byte, doc *pb.DocxDocumentWithMetadata) {
 	// ParagraphCount is a document-wide summary — count every <w:p>
 	// element in the raw XML, not just the ones the typed walker
@@ -183,6 +187,11 @@ func parseBlockContainer(dec *xml.Decoder, parent xml.StartElement, doc *pb.Docx
 				tbl := parseTable(dec, t, doc)
 				out = append(out, &pb.BlockLevelElement{
 					Element: &pb.BlockLevelElement_Table{Table: tbl},
+				})
+			case "sdt":
+				sdt := parseSdtBlock(dec, t, doc)
+				out = append(out, &pb.BlockLevelElement{
+					Element: &pb.BlockLevelElement_Sdt{Sdt: sdt},
 				})
 			default:
 				skipElement(dec, t)
@@ -270,6 +279,11 @@ func parseParagraphChildren(dec *xml.Decoder, start xml.StartElement, doc *pb.Do
 				out = append(out, &pb.ParagraphChild{
 					Child: &pb.ParagraphChild_Del{Del: del},
 				})
+			case "sdt":
+				sdt := parseSdtRun(dec, t, doc)
+				out = append(out, &pb.ParagraphChild{
+					Child: &pb.ParagraphChild_Sdt{Sdt: sdt},
+				})
 			default:
 				skipElement(dec, t)
 			}
@@ -346,6 +360,127 @@ func parseBookmarkEnd(start xml.StartElement) *pb.BookmarkEnd {
 		}
 	}
 	return b
+}
+
+// parseSdtBlock reads a block-level <w:sdt> subtree and returns a
+// StructuredDocumentTag whose .Content is an SdtContentBlock.
+// Block-level SDTs appear as children of <w:body> or <w:tc>; their
+// <w:sdtContent> holds paragraphs and tables.
+func parseSdtBlock(dec *xml.Decoder, start xml.StartElement, doc *pb.DocxDocumentWithMetadata) *pb.StructuredDocumentTag {
+	sdt := &pb.StructuredDocumentTag{}
+	for {
+		tok, err := dec.Token()
+		if err != nil {
+			return sdt
+		}
+		switch t := tok.(type) {
+		case xml.StartElement:
+			switch t.Name.Local {
+			case "sdtPr":
+				sdt.SdtPr = parseSdtProperties(dec, t)
+			case "sdtEndPr":
+				skipElement(dec, t)
+			case "sdtContent":
+				sdt.Content = &pb.StructuredDocumentTag_SdtContentBlock{
+					SdtContentBlock: &pb.SdtContentBlock{
+						Content: parseBlockContainer(dec, t, doc),
+					},
+				}
+			default:
+				skipElement(dec, t)
+			}
+		case xml.EndElement:
+			if t.Name.Local == start.Name.Local {
+				return sdt
+			}
+		}
+	}
+}
+
+// parseSdtRun reads a run-level <w:sdt> subtree (appearing inside a
+// paragraph) and returns a StructuredDocumentTag whose .Content is an
+// SdtContentRun. Run-level <w:sdtContent> holds ParagraphChild nodes
+// (runs, hyperlinks, nested sdts, …).
+func parseSdtRun(dec *xml.Decoder, start xml.StartElement, doc *pb.DocxDocumentWithMetadata) *pb.StructuredDocumentTag {
+	sdt := &pb.StructuredDocumentTag{}
+	for {
+		tok, err := dec.Token()
+		if err != nil {
+			return sdt
+		}
+		switch t := tok.(type) {
+		case xml.StartElement:
+			switch t.Name.Local {
+			case "sdtPr":
+				sdt.SdtPr = parseSdtProperties(dec, t)
+			case "sdtEndPr":
+				skipElement(dec, t)
+			case "sdtContent":
+				sdt.Content = &pb.StructuredDocumentTag_SdtContentRun{
+					SdtContentRun: &pb.SdtContentRun{
+						Content: parseParagraphChildren(dec, t, doc),
+					},
+				}
+			default:
+				skipElement(dec, t)
+			}
+		case xml.EndElement:
+			if t.Name.Local == start.Name.Local {
+				return sdt
+			}
+		}
+	}
+}
+
+// parseSdtProperties lifts the commonly-used subset of <w:sdtPr>
+// children onto SdtProperties: alias, tag, id, lock, showingPlcHdr,
+// temporary. The sdt_type oneof (date, docPart, comboBox, …) and the
+// data_binding / placeholder / rpr nested messages are deferred — they
+// have no BlockLevelElement consumers yet.
+func parseSdtProperties(dec *xml.Decoder, start xml.StartElement) *pb.SdtProperties {
+	props := &pb.SdtProperties{}
+	for {
+		tok, err := dec.Token()
+		if err != nil {
+			return props
+		}
+		switch t := tok.(type) {
+		case xml.StartElement:
+			switch t.Name.Local {
+			case "alias":
+				props.Alias = attrVal(t, "val")
+			case "tag":
+				props.Tag = attrVal(t, "val")
+			case "id":
+				if n, err := parseInt32(attrVal(t, "val")); err == nil {
+					props.Id = n
+				}
+			case "lock":
+				switch attrVal(t, "val") {
+				case "contentLocked":
+					props.Locking = pb.SdtLockingValue_SDT_LOCK_CONTENT_LOCKED
+					props.Lock = true
+				case "sdtContentLocked":
+					props.Locking = pb.SdtLockingValue_SDT_LOCK_SDT_CONTENT_LOCKED
+					props.Lock = true
+				case "sdtLocked":
+					props.Locking = pb.SdtLockingValue_SDT_LOCK_SDT_LOCKED
+					props.Lock = true
+				case "unlocked", "":
+					props.Locking = pb.SdtLockingValue_SDT_LOCK_NONE
+				}
+			case "showingPlcHdr":
+				props.ShowingPlaceholder = true
+			case "temporary":
+				props.Temporary = true
+			}
+			skipElement(dec, t)
+		case xml.EndElement:
+			if t.Name.Local == start.Name.Local {
+				return props
+			}
+		}
+	}
 }
 
 // parseRun reads a <w:r> subtree and returns the populated Run,

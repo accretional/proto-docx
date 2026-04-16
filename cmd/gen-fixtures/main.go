@@ -165,6 +165,18 @@ func fixtures() []fixture {
 			},
 		},
 		{
+			name: "14_sdt.docx",
+			spec: docxbuild.Spec{
+				Paragraphs: []string{"Body above SDTs"},
+				BlockSdts: []docxbuild.BlockSdt{
+					{Alias: "Title", Tag: "DocTitle", ID: 101, Text: "SDT title"},
+				},
+				RunSdts: []docxbuild.RunSdt{
+					{Alias: "Author", Tag: "AuthorName", ID: 102, Text: "Ada Lovelace"},
+				},
+			},
+		},
+		{
 			name: "11_kitchen_sink.docx",
 			spec: docxbuild.Spec{
 				Paragraphs: []string{
