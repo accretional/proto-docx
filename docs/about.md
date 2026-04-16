@@ -121,12 +121,13 @@ them is mechanical. See `README.md` `## NEXT STEPS`.
 
 ## Demo screenshots
 
-The three images below are produced by `cmd/demo-screenshots`, which
-writes HTML viewer pages under `docs/screenshots/_html/` and hands them
-to a [`chromerpc`](https://github.com/accretional/chromerpc) gRPC
-server (by default `localhost:50051`) for capture. When no server is
-reachable, the command falls back to placeholder PNGs so the
-documentation doesn't show broken images.
+The images below are produced by `cmd/demo-screenshots`, which writes
+HTML viewer pages under `screenshots/_html/` and hands them to a
+[`chromerpc`](https://github.com/accretional/chromerpc) gRPC server (by
+default `localhost:50051`) for capture. When no server is reachable,
+the command falls back to placeholder PNGs so the documentation
+doesn't show broken images. `./LET_IT_RIP.sh` regenerates them on
+every run.
 
 Regenerate real captures against a running chromerpc server:
 
@@ -134,13 +135,13 @@ Regenerate real captures against a running chromerpc server:
 CHROMERPC_ADDR=localhost:50051 go run ./cmd/demo-screenshots -force
 ```
 
-![Kitchen-sink DOCX rendered](screenshots/docx-rendered.png)
+![Kitchen-sink DOCX rendered](../screenshots/docx-rendered.png)
 
 *Figure 1.* The kitchen-sink fixture's extracted paragraphs rendered
 as HTML. Tracked-change markup survives the round-trip: the italic
 sentence is `<w:ins>`-wrapped, the strikethrough is `<w:del>`.
 
-![Decoded DocxDocumentWithMetadata](screenshots/docx-decoded.png)
+![Decoded DocxDocumentWithMetadata](../screenshots/docx-decoded.png)
 
 *Figure 2.* The same fixture after `docxcodec.Decode`, summarised as
 JSON. Paragraph / image / font counts and the `HasTrackedChanges` /
@@ -148,7 +149,7 @@ JSON. Paragraph / image / font counts and the `HasTrackedChanges` /
 `DocxDocumentWithMetadata`; `raw_bytes` carries the original 9 KB
 package so `Encode` is byte-faithful.
 
-![OPC package parts](screenshots/docx-parts.png)
+![OPC package parts](../screenshots/docx-parts.png)
 
 *Figure 3.* The OPC container view — every ZIP entry in the fixture:
 `[Content_Types].xml`, the top-level and per-directory `_rels`,
@@ -156,6 +157,14 @@ package so `Encode` is byte-faithful.
 `fontTable.xml`, `comments.xml`, `footnotes.xml`, `endnotes.xml`,
 `header1.xml`, `footer1.xml`), and the two media files under
 `word/media/`.
+
+![Typed Body.Content tree](../screenshots/docx-typed-body.png)
+
+*Figure 4.* `DocxPackage.Document.Body.Content` after `Decode` — one
+entry per paragraph, runs / tracked-change wrappers nested underneath,
+and leaf `TextContent` / `DeletedText` / `Break` / `Tab` values at the
+bottom. Walking this tree lets consumers inspect document content
+through the proto API rather than re-parsing `word/document.xml`.
 
 ## Where to go next
 

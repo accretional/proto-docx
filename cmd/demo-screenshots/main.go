@@ -32,8 +32,8 @@ import (
 const defaultChromeRPCAddr = "localhost:50051"
 
 func main() {
-	outDir := flag.String("out", "docs/screenshots", "output directory for PNGs")
-	htmlDir := flag.String("html-out", "docs/screenshots/_html", "where demo HTML pages are written")
+	outDir := flag.String("out", "screenshots", "output directory for PNGs")
+	htmlDir := flag.String("html-out", "screenshots/_html", "where demo HTML pages are written")
 	fixture := flag.String("fixture", "data/generated/11_kitchen_sink.docx", "path to the DOCX fixture to demo")
 	force := flag.Bool("force", false, "regenerate even if files exist")
 	flag.Parse()
@@ -66,14 +66,17 @@ func main() {
 	rendered := filepath.Join(*htmlDir, "docx-rendered.html")
 	decoded := filepath.Join(*htmlDir, "docx-decoded.html")
 	parts := filepath.Join(*htmlDir, "docx-parts.html")
+	typedBody := filepath.Join(*htmlDir, "docx-typed-body.html")
 	writeIf(rendered, []byte(renderDocx(doc, *fixture)), *force)
 	writeIf(decoded, []byte(renderDecoded(doc)), *force)
 	writeIf(parts, []byte(renderParts(raw)), *force)
+	writeIf(typedBody, []byte(renderTypedBody(doc)), *force)
 
 	targets := []target{
 		{html: rendered, png: filepath.Join(*outDir, "docx-rendered.png"), caption: "Kitchen-sink DOCX (plain-text paragraphs)"},
 		{html: decoded, png: filepath.Join(*outDir, "docx-decoded.png"), caption: "Decoded DocxDocumentWithMetadata"},
 		{html: parts, png: filepath.Join(*outDir, "docx-parts.png"), caption: "OPC package parts"},
+		{html: typedBody, png: filepath.Join(*outDir, "docx-typed-body.png"), caption: "Typed Body.Content tree (Paragraph/Run/Text/Ins/Del)"},
 	}
 
 	if chromeRPCReachable(addr) {
@@ -163,6 +166,96 @@ func renderDecoded(doc *pb.DocxDocumentWithMetadata) string {
 pre{background:#0f172a;color:#f8fafc;padding:16px;border-radius:6px;overflow:auto}</style>
 </head><body>
 <h1>docxcodec.Decode → DocxDocumentWithMetadata (summary)</h1>
+<pre>%s</pre>
+</body></html>`, htmlEscape(string(b)))
+}
+
+// renderTypedBody projects DocxPackage.Document.Body.Content as a
+// compact nested view — one row per Paragraph, one sub-row per
+// ParagraphChild (Run / Ins / Del), and the leaf RunChildren
+// (TextContent, DeletedText, Break, Tab) inline. Demonstrates the
+// typed-proto surface populated by Decode.
+func renderTypedBody(doc *pb.DocxDocumentWithMetadata) string {
+	type leaf struct {
+		Kind string `json:"kind"`
+		Text string `json:"text,omitempty"`
+	}
+	type child struct {
+		Kind   string  `json:"kind"` // run | ins | del
+		Author string  `json:"author,omitempty"`
+		Leaves []leaf  `json:"leaves,omitempty"`
+		Inner  []child `json:"inner,omitempty"`
+	}
+	type para struct {
+		Children []child `json:"children"`
+	}
+
+	leavesFromRun := func(r *pb.Run) []leaf {
+		var out []leaf
+		for _, rc := range r.Content {
+			switch {
+			case rc.GetText() != nil:
+				out = append(out, leaf{Kind: "text", Text: rc.GetText().Value})
+			case rc.GetDelText() != nil:
+				out = append(out, leaf{Kind: "delText", Text: rc.GetDelText().Value})
+			case rc.GetBr() != nil:
+				out = append(out, leaf{Kind: "br"})
+			case rc.GetTab() != nil:
+				out = append(out, leaf{Kind: "tab"})
+			}
+		}
+		return out
+	}
+
+	var paras []para
+	if doc.DocxPackage != nil && doc.DocxPackage.Document != nil && doc.DocxPackage.Document.Body != nil {
+		for _, be := range doc.DocxPackage.Document.Body.Content {
+			p := be.GetParagraph()
+			if p == nil {
+				continue
+			}
+			var cs []child
+			for _, pc := range p.Content {
+				switch {
+				case pc.GetRun() != nil:
+					cs = append(cs, child{Kind: "run", Leaves: leavesFromRun(pc.GetRun())})
+				case pc.GetIns() != nil:
+					ins := pc.GetIns()
+					c := child{Kind: "ins"}
+					if ins.Info != nil {
+						c.Author = ins.Info.Author
+					}
+					for _, c2 := range ins.Content {
+						if c2.GetRun() != nil {
+							c.Inner = append(c.Inner, child{Kind: "run", Leaves: leavesFromRun(c2.GetRun())})
+						}
+					}
+					cs = append(cs, c)
+				case pc.GetDel() != nil:
+					del := pc.GetDel()
+					c := child{Kind: "del"}
+					if del.Info != nil {
+						c.Author = del.Info.Author
+					}
+					for _, c2 := range del.Content {
+						if c2.GetRun() != nil {
+							c.Inner = append(c.Inner, child{Kind: "run", Leaves: leavesFromRun(c2.GetRun())})
+						}
+					}
+					cs = append(cs, c)
+				}
+			}
+			paras = append(paras, para{Children: cs})
+		}
+	}
+
+	b, _ := json.MarshalIndent(paras, "", "  ")
+	return fmt.Sprintf(`<!doctype html>
+<html><head><meta charset="utf-8"><title>Typed Body.Content</title>
+<style>body{font-family:monospace;padding:24px}
+pre{background:#0f172a;color:#f8fafc;padding:16px;border-radius:6px;overflow:auto}</style>
+</head><body>
+<h1>DocxPackage.Document.Body.Content (typed proto tree)</h1>
 <pre>%s</pre>
 </body></html>`, htmlEscape(string(b)))
 }
