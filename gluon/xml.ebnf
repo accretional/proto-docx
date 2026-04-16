@@ -1,0 +1,82 @@
+(* Minimal WordprocessingML grammar for the gluon experiment.
+
+   Scope: the text-bearing subset docxcodec/ already parses by hand —
+   <w:document> wrapping <w:body>, <w:body> containing paragraphs
+   (<w:p>), paragraphs containing runs (<w:r>) and tracked-change
+   wrappers (<w:ins>, <w:del>), runs containing <w:t> / <w:delText> /
+   <w:br> / <w:tab>.
+
+   gluon skips whitespace between terminals. The test driver calls
+   tokenize() to preprocess real word/document.xml into a stream of
+   whitespace-separated tokens where:
+
+     - element names collapse to single placeholders like "w:p"
+       (quoted-string terminals in this grammar)
+     - attributes collapse to a single "A" placeholder per attribute
+     - text content collapses to a single "T" placeholder per non-empty
+       run (its length and whitespace are discarded — see FINDINGS.md)
+     - self-closing "<elem/>" expands to the two tokens "<" "/"
+       followed by the name token and ">"
+
+   Anything outside the modelled subset falls through to `misc`,
+   which swallows a balanced pair of open/close tokens (or a single
+   self-close) without recursing. *)
+
+document = doc_open , body , doc_close ;
+doc_open  = "<" , "w:document" , attrs , ">" ;
+doc_close = "<" , "/" , "w:document" , ">" ;
+
+body = body_open , { block } , body_close ;
+body_open  = "<" , "w:body" , attrs , ">" ;
+body_close = "<" , "/" , "w:body" , ">" ;
+
+block = paragraph | misc ;
+
+paragraph = p_open , { p_child } , p_close ;
+p_open  = "<" , "w:p" , attrs , ">" ;
+p_close = "<" , "/" , "w:p" , ">" ;
+
+p_child = tracked_ins | tracked_del | run | misc ;
+
+tracked_ins = ins_open , { run | misc } , ins_close ;
+ins_open  = "<" , "w:ins" , attrs , ">" ;
+ins_close = "<" , "/" , "w:ins" , ">" ;
+
+tracked_del = del_open , { run | misc } , del_close ;
+del_open  = "<" , "w:del" , attrs , ">" ;
+del_close = "<" , "/" , "w:del" , ">" ;
+
+run = run_open , { run_child } , run_close ;
+run_open  = "<" , "w:r" , attrs , ">" ;
+run_close = "<" , "/" , "w:r" , ">" ;
+
+run_child = text | del_text | br | tab | misc ;
+
+text = text_open , text_body , text_close ;
+text_open  = "<" , "w:t" , attrs , ">" ;
+text_close = "<" , "/" , "w:t" , ">" ;
+text_body  = { "T" } ;
+
+del_text = dt_open , text_body , dt_close ;
+dt_open  = "<" , "w:delText" , attrs , ">" ;
+dt_close = "<" , "/" , "w:delText" , ">" ;
+
+(* encoding/xml normalises self-close to StartElement + EndElement, so
+   the tokeniser emits the full pair form for <w:br/> and <w:tab/>. *)
+br = br_open , br_close ;
+br_open  = "<" , "w:br"  , attrs , ">" ;
+br_close = "<" , "/" , "w:br" , ">" ;
+
+tab = tab_open , tab_close ;
+tab_open  = "<" , "w:tab" , attrs , ">" ;
+tab_close = "<" , "/" , "w:tab" , ">" ;
+
+(* Catch-all for elements the subset doesn't enumerate. misc_pair's
+   body is permissive: table cells (w:tc → "N") wrap <w:p>, hyperlinks
+   wrap <w:r>, and both appear as misc here. *)
+misc = misc_pair ;
+misc_pair = "<" , "N" , attrs , ">" , { misc_child } , "<" , "/" , "N" , ">" ;
+misc_child = paragraph | run | tracked_ins | tracked_del | text | misc | "T" ;
+
+(* attrs collapses zero or more attributes into "A" placeholders. *)
+attrs = { "A" } ;
