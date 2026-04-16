@@ -177,6 +177,16 @@ func fixtures() []fixture {
 			},
 		},
 		{
+			name: "15_fields.docx",
+			spec: docxbuild.Spec{
+				Paragraphs: []string{"Body above fields"},
+				Fields: []docxbuild.Field{
+					{Instr: `PAGE \* MERGEFORMAT`, Cached: "1", Dirty: true},
+					{Instr: `DATE \@ "yyyy-MM-dd"`, Cached: "2026-04-16"},
+				},
+			},
+		},
+		{
 			name: "11_kitchen_sink.docx",
 			spec: docxbuild.Spec{
 				Paragraphs: []string{

@@ -209,9 +209,12 @@ is not introspectable via typed fields:
   `temporary` lifted onto `SdtProperties` — and `Table` entries with
   `TableProperties` (style, width), `TableGrid` columns, `TableRow`s,
   and `TableCell`s whose `.Content` recursively holds block-level
-  elements (nested paragraphs and tables). Everything outside that
-  subset — field-char/instr runs (`w:fldChar`, `w:instrText`),
-  drawings, pictures, custom XML, and the long tail of `RunChild`
+  elements (nested paragraphs and tables). Field runs are covered
+  too: `<w:fldChar>` populates `RunChild_FieldChar` (fldCharType enum,
+  dirty, fldLock) and `<w:instrText>` populates `RunChild_InstrText`
+  (value + `xml:space="preserve"`). Everything outside that subset —
+  drawings, pictures, custom XML, the `w:ffData` form-field metadata
+  nested inside fldChar BEGIN, and the long tail of `RunChild`
   variants — is still unpopulated in the typed tree. Consumers that
   need them must walk the typed XML tree on `Decoded.Document` (via
   `DecodeWith`) instead.

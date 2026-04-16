@@ -30,6 +30,7 @@ type Spec struct {
 	Bookmarks     []Bookmark  // each wrapped in its own <w:p>
 	BlockSdts     []BlockSdt  // each emitted as a body-level <w:sdt>
 	RunSdts       []RunSdt    // each emitted inside its own <w:p>
+	Fields        []Field     // each emitted as a <w:p> with fldChar/instr sequence
 }
 
 // Image is a single media part embedded under word/media/.
@@ -75,6 +76,23 @@ type RunSdt struct {
 	Tag   string // w:tag w:val
 	ID    int32  // w:id w:val
 	Text  string // run text inside sdtContent
+}
+
+// Field emits a paragraph carrying a classic OOXML field sequence:
+//
+//	<w:r><w:fldChar w:fldCharType="begin"/></w:r>
+//	<w:r><w:instrText>Instr</w:instrText></w:r>
+//	<w:r><w:fldChar w:fldCharType="separate"/></w:r>
+//	<w:r><w:t>Cached</w:t></w:r>
+//	<w:r><w:fldChar w:fldCharType="end"/></w:r>
+//
+// Instr is the field instruction (e.g. "PAGE \* MERGEFORMAT") and
+// Cached is the rendered result (the value Word shows when the field
+// isn't refreshed).
+type Field struct {
+	Instr  string // w:instrText content
+	Cached string // displayed result between SEPARATE and END
+	Dirty  bool   // w:dirty on the BEGIN fldChar
 }
 
 // Table is a rectangular table spec consumed by buildTable. Each cell
@@ -257,6 +275,9 @@ func buildDocument(s Spec) string {
 	for _, rsdt := range s.RunSdts {
 		sb.WriteString(buildRunSdt(rsdt))
 	}
+	for _, fld := range s.Fields {
+		sb.WriteString(buildFieldParagraph(fld))
+	}
 	sb.WriteString(buildSectPr(s))
 	sb.WriteString(`</w:body></w:document>`)
 	return sb.String()
@@ -353,6 +374,23 @@ func buildRunSdt(r RunSdt) string {
 	return `<w:p><w:sdt>` + sdtPrBlock(r.Alias, r.Tag, r.ID) +
 		`<w:sdtContent><w:r><w:t>` + escape(r.Text) + `</w:t></w:r></w:sdtContent>` +
 		`</w:sdt></w:p>`
+}
+
+// buildFieldParagraph emits a paragraph carrying a BEGIN/instr/
+// SEPARATE/result/END field sequence. `f.Dirty` sets w:dirty="1" on
+// the BEGIN fldChar.
+func buildFieldParagraph(f Field) string {
+	beginAttrs := ` w:fldCharType="begin"`
+	if f.Dirty {
+		beginAttrs += ` w:dirty="1"`
+	}
+	return `<w:p>` +
+		`<w:r><w:fldChar` + beginAttrs + `/></w:r>` +
+		`<w:r><w:instrText xml:space="preserve">` + escape(f.Instr) + `</w:instrText></w:r>` +
+		`<w:r><w:fldChar w:fldCharType="separate"/></w:r>` +
+		`<w:r><w:t>` + escape(f.Cached) + `</w:t></w:r>` +
+		`<w:r><w:fldChar w:fldCharType="end"/></w:r>` +
+		`</w:p>`
 }
 
 // buildTable emits a <w:tbl> for the given Table spec. If t.GridCols is

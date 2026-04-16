@@ -194,7 +194,12 @@ through the same block- or paragraph-child walker. See
 `data/generated/14_sdt.docx`, and the
 `TestDecodeBodyTypedTreeHyperlink` / `TestDecodeBodyTypedTreeBookmarks`
 / `TestDecodeBodyTypedTreeSdtBlock` / `TestDecodeBodyTypedTreeSdtRun`
-assertions for coverage.
+assertions for coverage. Classic BEGIN / instrText / SEPARATE / result
+/ END field sequences also land on the typed tree now, with
+`<w:fldChar>` populating `RunChild_FieldChar` (fldCharType enum, dirty,
+fldLock) and `<w:instrText>` populating `RunChild_InstrText` (value +
+`xml:space="preserve"`). See `data/generated/15_fields.docx` and
+`TestDecodeBodyTypedTreeField`.
 
 Paragraph counting was also hardened: `ParagraphCount` is now
 computed up-front from the raw `word/document.xml` via

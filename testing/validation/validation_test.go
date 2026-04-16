@@ -210,6 +210,40 @@ func TestValidate(t *testing.T) {
 				}
 			}
 
+			// Fields fixture must surface at least one BEGIN fldChar
+			// and one InstrText in the typed run content.
+			if strings.Contains(rel, "15_fields") {
+				var begins, instrs int
+				for _, e := range body.Content {
+					p := e.GetParagraph()
+					if p == nil {
+						continue
+					}
+					for _, c := range p.Content {
+						run := c.GetRun()
+						if run == nil {
+							continue
+						}
+						for _, rc := range run.Content {
+							if fc := rc.GetFieldChar(); fc != nil {
+								if fc.FieldCharType == 0 { // FIELD_CHAR_BEGIN
+									begins++
+								}
+							}
+							if rc.GetInstrText() != nil {
+								instrs++
+							}
+						}
+					}
+				}
+				if begins == 0 {
+					t.Error("expected ≥1 BEGIN fldChar, got none")
+				}
+				if instrs == 0 {
+					t.Error("expected ≥1 InstrText, got none")
+				}
+			}
+
 			// Fixtures whose filenames imply headers/footers must
 			// surface at least one section with matching references.
 			if strings.Contains(rel, "10_headers_footers") || strings.Contains(rel, "11_kitchen_sink") {

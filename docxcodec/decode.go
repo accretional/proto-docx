@@ -515,6 +515,16 @@ func parseRun(dec *xml.Decoder, start xml.StartElement) *pb.Run {
 					Child: &pb.RunChild_Tab{Tab: &pb.Tab{}},
 				})
 				skipElement(dec, t)
+			case "fldChar":
+				r.Content = append(r.Content, &pb.RunChild{
+					Child: &pb.RunChild_FieldChar{FieldChar: parseFieldChar(t)},
+				})
+				skipElement(dec, t)
+			case "instrText":
+				it := parseInstrText(dec, t)
+				r.Content = append(r.Content, &pb.RunChild{
+					Child: &pb.RunChild_InstrText{InstrText: it},
+				})
 			default:
 				skipElement(dec, t)
 			}
@@ -543,6 +553,53 @@ func parseTextContent(dec *xml.Decoder, start xml.StartElement) *pb.TextContent 
 		case xml.EndElement:
 			if t.Name.Local == start.Name.Local {
 				return tc
+			}
+		}
+	}
+}
+
+// parseFieldChar lifts attributes off <w:fldChar>: fldCharType (enum),
+// dirty, fldLock. The nested <w:ffData> (form-field metadata) is not
+// yet modeled — callers that need it fall back to the raw-bytes path.
+func parseFieldChar(se xml.StartElement) *pb.FieldChar {
+	fc := &pb.FieldChar{}
+	for _, a := range se.Attr {
+		switch a.Name.Local {
+		case "fldCharType":
+			switch a.Value {
+			case "begin":
+				fc.FieldCharType = pb.FieldCharType_FIELD_CHAR_BEGIN
+			case "separate":
+				fc.FieldCharType = pb.FieldCharType_FIELD_CHAR_SEPARATE
+			case "end":
+				fc.FieldCharType = pb.FieldCharType_FIELD_CHAR_END
+			}
+		case "dirty":
+			fc.Dirty = a.Value != "0" && a.Value != "false"
+		case "fldLock":
+			fc.Lock = a.Value != "0" && a.Value != "false"
+		}
+	}
+	return fc
+}
+
+// parseInstrText reads <w:instrText>'s char-data into a FieldInstrText,
+// honoring xml:space="preserve".
+func parseInstrText(dec *xml.Decoder, start xml.StartElement) *pb.FieldInstrText {
+	it := &pb.FieldInstrText{PreserveSpace: hasPreserveSpace(start)}
+	for {
+		tok, err := dec.Token()
+		if err != nil {
+			return it
+		}
+		switch t := tok.(type) {
+		case xml.CharData:
+			it.Value += string(t)
+		case xml.StartElement:
+			skipElement(dec, t)
+		case xml.EndElement:
+			if t.Name.Local == start.Name.Local {
+				return it
 			}
 		}
 	}

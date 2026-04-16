@@ -53,6 +53,7 @@ All fixtures under `data/generated/` are built by
 | `12_tables.docx` | Two `<w:tbl>` tables — one with `<w:tblStyle>` and an explicit `<w:tblGrid>`, one with inferred grid. |
 | `13_hyperlinks_bookmarks.docx` | External `<w:hyperlink r:id>` with tooltip + `w:history`, internal `<w:hyperlink w:anchor>`, two `<w:bookmarkStart>`/`<w:bookmarkEnd>` pairs. |
 | `14_sdt.docx` | Body-level `<w:sdt>` with `SdtContentBlock` holding one paragraph, and a run-level `<w:sdt>` inside a paragraph with `SdtContentRun` holding one run. Alias / tag / id on `<w:sdtPr>`. |
+| `15_fields.docx` | Two `BEGIN / instrText / SEPARATE / result / END` field sequences (`PAGE \* MERGEFORMAT` with `w:dirty="1"`, and `DATE`). Exercises `RunChild_FieldChar` + `RunChild_InstrText`. |
 
 Real-world DOCX files live at the top level of `data/`
 (e.g. `data/DOCX_TestPage.docx`, `data/sample-word-document.docx`) and

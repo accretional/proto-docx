@@ -899,6 +899,74 @@ func TestDecodeBodyTypedTreeSdtRun(t *testing.T) {
 	}
 }
 
+// TestDecodeBodyTypedTreeField covers a classic BEGIN / instrText /
+// SEPARATE / result / END field sequence. fldChar type enum and
+// dirty flag must flow onto FieldChar; instrText content and
+// xml:space="preserve" must flow onto FieldInstrText.
+func TestDecodeBodyTypedTreeField(t *testing.T) {
+	var buf bytes.Buffer
+	w := zip.NewWriter(&buf)
+	f, _ := w.Create("word/document.xml")
+	_, _ = f.Write([]byte(
+		`<?xml version="1.0"?>` +
+			`<w:document xmlns:w="http://w" xmlns:xml="http://www.w3.org/XML/1998/namespace"><w:body>` +
+			`<w:p>` +
+			`<w:r><w:fldChar w:fldCharType="begin" w:dirty="1"/></w:r>` +
+			`<w:r><w:instrText xml:space="preserve">PAGE \* MERGEFORMAT</w:instrText></w:r>` +
+			`<w:r><w:fldChar w:fldCharType="separate"/></w:r>` +
+			`<w:r><w:t>1</w:t></w:r>` +
+			`<w:r><w:fldChar w:fldCharType="end"/></w:r>` +
+			`</w:p>` +
+			`</w:body></w:document>`))
+	_ = w.Close()
+
+	doc, err := Decode(buf.Bytes())
+	if err != nil {
+		t.Fatalf("Decode: %v", err)
+	}
+	p := doc.DocxPackage.Document.Body.Content[0].GetParagraph()
+	if len(p.Content) != 5 {
+		t.Fatalf("paragraph children = %d, want 5", len(p.Content))
+	}
+
+	begin := p.Content[0].GetRun().Content[0].GetFieldChar()
+	if begin == nil {
+		t.Fatal("children[0] run has no FieldChar")
+	}
+	if begin.FieldCharType != pb.FieldCharType_FIELD_CHAR_BEGIN {
+		t.Errorf("begin.FieldCharType = %v, want BEGIN", begin.FieldCharType)
+	}
+	if !begin.Dirty {
+		t.Error("begin.Dirty = false, want true")
+	}
+
+	instr := p.Content[1].GetRun().Content[0].GetInstrText()
+	if instr == nil {
+		t.Fatal("children[1] run has no InstrText")
+	}
+	if !instr.PreserveSpace {
+		t.Error("InstrText.PreserveSpace = false, want true")
+	}
+	if instr.Value != `PAGE \* MERGEFORMAT` {
+		t.Errorf("InstrText.Value = %q, want %q", instr.Value, `PAGE \* MERGEFORMAT`)
+	}
+
+	sep := p.Content[2].GetRun().Content[0].GetFieldChar()
+	if sep == nil || sep.FieldCharType != pb.FieldCharType_FIELD_CHAR_SEPARATE {
+		t.Errorf("SEPARATE fldChar = %+v", sep)
+	}
+
+	// The cached result between SEPARATE and END is a plain text run.
+	if got := p.Content[3].GetRun().Content[0].GetText().Value; got != "1" {
+		t.Errorf("cached result = %q, want 1", got)
+	}
+
+	end := p.Content[4].GetRun().Content[0].GetFieldChar()
+	if end == nil || end.FieldCharType != pb.FieldCharType_FIELD_CHAR_END {
+		t.Errorf("END fldChar = %+v", end)
+	}
+}
+
 // TestDecodeParagraphCountCountsAlternateContent guards against the
 // undercount regression surfaced by the gluon experiment on
 // DOCX_TestPage.docx: paragraphs inside <mc:AlternateContent> and
