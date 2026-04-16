@@ -1,0 +1,4147 @@
+// OpenDOCX Protocol Buffer Schema
+// A technically faithful representation of the OOXML WordprocessingML (.docx)
+// file format as defined in ECMA-376 / ISO/IEC 29500 (Office Open XML).
+//
+// Namespace mapping:
+//   w:  = http://schemas.openxmlformats.org/wordprocessingml/2006/main
+//   r:  = http://schemas.openxmlformats.org/officeDocument/2006/relationships
+//   wp: = http://schemas.openxmlformats.org/drawingml/2006/wordprocessingDrawing
+//   a:  = http://schemas.openxmlformats.org/drawingml/2006/main
+//   pic:= http://schemas.openxmlformats.org/drawingml/2006/picture
+//   mc: = http://schemas.openxmlformats.org/markup-compatibility/2006
+//   v:  = urn:schemas-microsoft-com:vml
+//   o:  = urn:schemas-microsoft-com:office:office
+//
+// Units:
+//   DXA   = twentieths of a point (1 inch = 1440 DXA)
+//   EMU   = English Metric Units (1 inch = 914400 EMU)
+//   HPC   = half-points (1pt = 2 HPC)
+//   Twips = 1/20th of a point (same as DXA in this context)
+//
+// This schema follows proto3 syntax. All optional fields use wrapper types or
+// oneof constructs where the OOXML spec uses XML attribute presence to signal
+// defaults vs. explicit values.
+
+syntax = "proto3";
+
+package openformat.v1;
+
+// go_package is set to proto-docx's own module so that generated DOCX
+// types live alongside proto-docx (not inside proto-xml).  The imported
+// mime.proto is remapped to proto-xml's generated package at protoc time
+// via `--go_opt=Mopenformat/v1/mime.proto=openformat/gen/go/openformat/v1`.
+option go_package = "openformat-docx/gen/go/openformat/v1;openformatdocxv1";
+
+import "openformat/v1/mime.proto";
+
+
+// ============================================================================
+// TOP-LEVEL PACKAGE
+// Represents the entire .docx ZIP package and its parts.
+// ============================================================================
+
+// The root message representing a complete .docx package.
+message Package {
+  // The main document part: word/document.xml
+  Document document = 1;
+
+  // Shared styles: word/styles.xml
+  Styles styles = 2;
+
+  // Numbering definitions: word/numbering.xml
+  Numbering numbering = 3;
+
+  // Document settings: word/settings.xml
+  Settings settings = 4;
+
+  // Web settings: word/webSettings.xml
+  WebSettings web_settings = 5;
+
+  // Font table: word/fontTable.xml
+  FontTable font_table = 6;
+
+  // Theme: word/theme/theme1.xml
+  Theme theme = 7;
+
+  // Footnotes part: word/footnotes.xml
+  FootnotesPart footnotes_part = 8;
+
+  // Endnotes part: word/endnotes.xml
+  EndnotesPart endnotes_part = 9;
+
+  // Comments part: word/comments.xml
+  CommentsPart comments_part = 10;
+
+  // Header parts: word/header1.xml, header2.xml, etc.
+  repeated HeaderPart header_parts = 11;
+
+  // Footer parts: word/footer1.xml, footer2.xml, etc.
+  repeated FooterPart footer_parts = 12;
+
+  // Custom XML parts
+  repeated CustomXmlPart custom_xml_parts = 13;
+
+  // Embedded objects and media
+  repeated MediaPart media_parts = 14;
+
+  // Glossary document: word/glossary/document.xml
+  GlossaryDocument glossary_document = 15;
+
+  // Package relationships (_rels/.rels)
+  repeated Relationship package_relationships = 16;
+
+  // Content types ([Content_Types].xml)
+  ContentTypes content_types = 17;
+}
+
+// [Content_Types].xml
+message ContentTypes {
+  repeated ContentTypeDefault defaults = 1;
+  repeated ContentTypeOverride overrides = 2;
+}
+
+message ContentTypeDefault {
+  string extension = 1;
+  string content_type = 2;
+}
+
+message ContentTypeOverride {
+  string part_name = 1;
+  string content_type = 2;
+}
+
+// OPC Relationship
+message Relationship {
+  string id = 1;       // rId1, rId2, ...
+  string type = 2;     // Full relationship type URI
+  string target = 3;   // Relative or absolute path
+  TargetMode target_mode = 4;
+}
+
+enum TargetMode {
+  TARGET_MODE_INTERNAL = 0;
+  TARGET_MODE_EXTERNAL = 1;
+}
+
+// Media (images, embedded objects)
+message MediaPart {
+  string relationship_id = 1;
+  string filename = 2;
+  string content_type = 3;
+  bytes data = 4;
+}
+
+// Custom XML part
+message CustomXmlPart {
+  string relationship_id = 1;
+  string item_id = 2;           // GUID
+  bytes xml_data = 3;
+  bytes schema_data = 4;
+}
+
+
+// ============================================================================
+// DOCUMENT (word/document.xml)
+// w:document
+// ============================================================================
+
+message Document {
+  // w:document attributes
+  bool conform_ance_strict = 1;  // w:conformance = "strict" vs "transitional"
+
+  // w:body — the main content container
+  Body body = 2;
+
+  // Markup compatibility attributes (mc:Ignorable etc.)
+  MarkupCompatibility markup_compatibility = 3;
+}
+
+// mc:AlternateContent / mc:Ignorable markup compatibility (OOXML §15.2.5)
+message MarkupCompatibility {
+  // mc:Ignorable — space-separated list of namespace prefixes to ignore
+  string ignorable = 1;
+  // mc:ProcessContent — prefixes whose unrecognised children may be processed
+  string process_content = 2;
+}
+
+// w:body
+message Body {
+  // Body-level block content: paragraphs, tables, SDTs, section properties
+  repeated BlockLevelElement content = 1;
+
+  // w:sectPr — the final (document-level) section properties
+  // If present, this is the last element in the body
+  SectionProperties section_properties = 2;
+}
+
+// Discriminated union of block-level elements that can appear in w:body,
+// w:tc (table cell), w:txbxContent, etc.
+message BlockLevelElement {
+  oneof element {
+    Paragraph paragraph = 1;
+    Table table = 2;
+    StructuredDocumentTag sdt = 3;
+    CustomXmlElement custom_xml = 4;
+    SectionProperties sect_pr = 5;        // mid-body sectPr (section break)
+    BookmarkStart bookmark_start = 6;
+    BookmarkEnd bookmark_end = 7;
+    PermStart perm_start = 8;
+    PermEnd perm_end = 9;
+    ProofErr proof_err = 10;
+    MoveFromRangeStart move_from_range_start = 11;
+    MoveFromRangeEnd move_from_range_end = 12;
+    MoveToRangeStart move_to_range_start = 13;
+    MoveToRangeEnd move_to_range_end = 14;
+    CommentRangeStart comment_range_start = 15;
+    CommentRangeEnd comment_range_end = 16;
+    AltChunk alt_chunk = 17;
+  }
+}
+
+
+// ============================================================================
+// PARAGRAPH (w:p)
+// ============================================================================
+
+message Paragraph {
+  // w:pPr — paragraph properties
+  ParagraphProperties properties = 1;
+
+  // w:p children: runs, hyperlinks, bookmarks, tracked changes, fields, etc.
+  repeated ParagraphChild content = 2;
+
+  // w:rsidR, w:rsidRPr, w:rsidDel, w:rsidDefault
+  RevisionSaveIds rsid = 3;
+}
+
+// Paragraph-level content discriminant
+message ParagraphChild {
+  oneof child {
+    Run run = 1;
+    Hyperlink hyperlink = 2;
+    BookmarkStart bookmark_start = 3;
+    BookmarkEnd bookmark_end = 4;
+    CommentRangeStart comment_range_start = 5;
+    CommentRangeEnd comment_range_end = 6;
+    TrackedChangeInsertion ins = 7;
+    TrackedChangeDeletion del = 8;
+    TrackedChangeMoveFrom move_from = 9;
+    TrackedChangeMoveTo move_to = 10;
+    ProofErr proof_err = 11;
+    FieldCharRun fld_char = 12;
+    FieldInstrRun fld_instr = 13;
+    StructuredDocumentTag sdt = 14;
+    CustomXmlElement custom_xml = 15;
+    PermStart perm_start = 16;
+    PermEnd perm_end = 17;
+    RunLevelSmartTag smart_tag = 18;
+    BidirectionalOverride bdo = 19;
+    BidirectionalEmbedding dir = 20;
+    Subheading subDoc = 21;
+  }
+}
+
+// w:pPr — Paragraph Properties
+message ParagraphProperties {
+  // w:pStyle — named style reference
+  string style_id = 1;
+
+  // w:keepNext — keep with next paragraph
+  OnOffElement keep_next = 2;
+
+  // w:keepLines — keep all lines together
+  OnOffElement keep_lines = 3;
+
+  // w:pageBreakBefore
+  OnOffElement page_break_before = 4;
+
+  // w:framePr — text frame properties
+  FrameProperties frame_pr = 5;
+
+  // w:widowControl
+  OnOffElement widow_control = 6;
+
+  // w:numPr — list/numbering reference
+  NumberingProperties num_pr = 7;
+
+  // w:suppressLineNumbers
+  OnOffElement suppress_line_numbers = 8;
+
+  // w:pBdr — paragraph borders
+  ParagraphBorders borders = 9;
+
+  // w:shd — paragraph shading
+  DocxShading shading = 10;
+
+  // w:tabs — custom tab stops
+  Tabs tabs = 11;
+
+  // w:suppressAutoHyphens
+  OnOffElement suppress_auto_hyphens = 12;
+
+  // w:kinsoku — kinsoku line breaking
+  OnOffElement kinsoku = 13;
+
+  // w:wordWrap
+  OnOffElement word_wrap = 14;
+
+  // w:overflowPunct
+  OnOffElement overflow_punct = 15;
+
+  // w:topLinePunct
+  OnOffElement top_line_punct = 16;
+
+  // w:autoSpaceDE — auto space between CJK and Latin text
+  OnOffElement auto_space_de = 17;
+
+  // w:autoSpaceDN — auto space between CJK text and numbers
+  OnOffElement auto_space_dn = 18;
+
+  // w:bidi — right-to-left paragraph
+  OnOffElement bidi = 19;
+
+  // w:adjustRightInd
+  OnOffElement adjust_right_ind = 20;
+
+  // w:snapToGrid
+  OnOffElement snap_to_grid = 21;
+
+  // w:spacing
+  ParagraphSpacing spacing = 22;
+
+  // w:ind — indentation
+  ParagraphIndentation ind = 23;
+
+  // w:contextualSpacing — suppress spacing between same-style paragraphs
+  OnOffElement contextual_spacing = 24;
+
+  // w:mirrorIndents
+  OnOffElement mirror_indents = 25;
+
+  // w:suppressOverlap
+  OnOffElement suppress_overlap = 26;
+
+  // w:jc — justification/alignment
+  JustificationValue jc = 27;
+
+  // w:textDirection
+  TextDirectionValue text_direction = 28;
+
+  // w:textAlignment — vertical text alignment within line
+  TextAlignmentValue text_alignment = 29;
+
+  // w:textboxTightWrap
+  TextboxTightWrapValue textbox_tight_wrap = 30;
+
+  // w:outlineLvl — outline level (0-8, 9 = body text)
+  int32 outline_lvl = 31;
+
+  // w:divId
+  int32 div_id = 32;
+
+  // w:cnfStyle — conditional formatting style bits
+  string cnf_style = 33;
+
+  // w:rPr — run properties applied to the paragraph mark
+  RunProperties rpr = 34;
+
+  // w:sectPr — section properties (inline; causes section break)
+  SectionProperties sect_pr = 35;
+
+  // Change tracking for paragraph properties (w:pPrChange)
+  ParagraphPropertiesChange ppr_change = 36;
+}
+
+message ParagraphPropertiesChange {
+  int32 id = 1;
+  string author = 2;
+  string date = 3;  // ISO 8601
+  ParagraphProperties old_ppr = 4;
+}
+
+message ParagraphSpacing {
+  // w:spacing w:before (DXA)
+  int32 before = 1;
+
+  // w:spacing w:beforeLines (hundredths of a line)
+  int32 before_lines = 2;
+
+  // w:spacing w:beforeAutospacing
+  bool before_autospacing = 3;
+
+  // w:spacing w:after (DXA)
+  int32 after = 4;
+
+  // w:spacing w:afterLines (hundredths of a line)
+  int32 after_lines = 5;
+
+  // w:spacing w:afterAutospacing
+  bool after_autospacing = 6;
+
+  // w:spacing w:line (DXA or line units, depending on lineRule)
+  int32 line = 7;
+
+  // w:spacing w:lineRule
+  LineSpacingRule line_rule = 8;
+}
+
+enum LineSpacingRule {
+  LINE_SPACING_AUTO = 0;       // w:auto
+  LINE_SPACING_EXACT = 1;      // w:exact
+  LINE_SPACING_AT_LEAST = 2;   // w:atLeast
+}
+
+message ParagraphIndentation {
+  // w:ind w:left (DXA) — can also be expressed as w:start for bidi
+  int32 left = 1;
+  int32 left_chars = 2;   // hundredths of a character width
+
+  // w:ind w:right / w:end (DXA)
+  int32 right = 3;
+  int32 right_chars = 4;
+
+  // w:ind w:hanging (DXA)
+  int32 hanging = 5;
+  int32 hanging_chars = 6;
+
+  // w:ind w:firstLine (DXA) — mutually exclusive with hanging
+  int32 first_line = 7;
+  int32 first_line_chars = 8;
+}
+
+message NumberingProperties {
+  // w:ilvl — zero-based indent level (0–8)
+  int32 ilvl = 1;
+
+  // w:numId — reference into w:numbering > w:num
+  int32 num_id = 2;
+
+  // w:ins — tracked insertion of numbering
+  TrackedChangeInfo ins = 3;
+}
+
+message ParagraphBorders {
+  ParagraphBorder top = 1;
+  ParagraphBorder left = 2;
+  ParagraphBorder bottom = 3;
+  ParagraphBorder right = 4;
+  ParagraphBorder between = 5;
+  ParagraphBorder bar = 6;
+}
+
+message ParagraphBorder {
+  BorderStyle style = 1;
+  int32 color = 2;       // RGB as 24-bit int (0xRRGGBB), or -1 for "auto"
+  ThemeColor theme_color = 3;
+  int32 theme_tint = 4;
+  int32 theme_shade = 5;
+  int32 size = 6;        // Eighths of a point
+  int32 space = 7;       // Points of spacing
+  bool shadow = 8;
+  bool frame = 9;
+}
+
+message Tabs {
+  repeated TabStop tab_stops = 1;
+}
+
+message TabStop {
+  TabStopType type = 1;
+  int32 pos = 2;         // DXA
+  TabLeader leader = 3;
+}
+
+enum TabStopType {
+  TAB_STOP_CLEAR = 0;
+  TAB_STOP_LEFT = 1;
+  TAB_STOP_CENTER = 2;
+  TAB_STOP_RIGHT = 3;
+  TAB_STOP_DECIMAL = 4;
+  TAB_STOP_BAR = 5;
+  TAB_STOP_NUM = 6;
+}
+
+enum TabLeader {
+  TAB_LEADER_NONE = 0;
+  TAB_LEADER_DOT = 1;
+  TAB_LEADER_HEAVY = 2;
+  TAB_LEADER_HYPHEN = 3;
+  TAB_LEADER_MIDDLE_DOT = 4;
+  TAB_LEADER_UNDERSCORE = 5;
+}
+
+enum JustificationValue {
+  JC_START = 0;         // w:start (logical start / left for LTR)
+  JC_END = 1;           // w:end
+  JC_LEFT = 2;          // w:left
+  JC_CENTER = 3;        // w:center
+  JC_RIGHT = 4;         // w:right
+  JC_BOTH = 5;          // w:both (justified)
+  JC_MEDIUM_KASHIDA = 6;
+  JC_DISTRIBUTE = 7;
+  JC_NUM_TAB = 8;
+  JC_HIGH_KASHIDA = 9;
+  JC_LOW_KASHIDA = 10;
+  JC_THAI_DISTRIBUTE = 11;
+}
+
+enum TextDirectionValue {
+  TEXT_DIR_LR = 0;
+  TEXT_DIR_RL = 1;
+  TEXT_DIR_LR_TB = 2;
+  TEXT_DIR_TB_LR = 3;
+  TEXT_DIR_TB_RL = 4;
+  TEXT_DIR_BTT_LR = 5;
+  TEXT_DIR_LR_TB_V = 6;
+  TEXT_DIR_TB_LR_V = 7;
+}
+
+enum TextAlignmentValue {
+  TEXT_ALIGN_AUTO = 0;
+  TEXT_ALIGN_TOP = 1;
+  TEXT_ALIGN_CENTER = 2;
+  TEXT_ALIGN_BASELINE = 3;
+  TEXT_ALIGN_BOTTOM = 4;
+}
+
+enum TextboxTightWrapValue {
+  TEXTBOX_NONE = 0;
+  TEXTBOX_ALL_LINES = 1;
+  TEXTBOX_FIRST_AND_LAST_LINE = 2;
+  TEXTBOX_FIRST_LINE_ONLY = 3;
+  TEXTBOX_LAST_LINE_ONLY = 4;
+}
+
+
+// ============================================================================
+// RUN (w:r)
+// ============================================================================
+
+message Run {
+  // w:rPr — run-level formatting
+  RunProperties properties = 1;
+
+  // Run content children
+  repeated RunChild content = 2;
+
+  // w:rsidDel, w:rsidR, w:rsidRPr
+  RevisionSaveIds rsid = 3;
+}
+
+// Discriminant for elements that can appear inside w:r
+message RunChild {
+  oneof child {
+    TextContent text = 1;               // w:t
+    DeletedText del_text = 2;           // w:delText (inside w:del)
+    FieldChar field_char = 3;           // w:fldChar
+    FieldInstrText instr_text = 4;      // w:instrText
+    Break br = 5;                       // w:br
+    Drawing drawing = 6;               // w:drawing
+    Picture picture = 7;               // w:pict (legacy VML)
+    NoBreakHyphen no_break_hyphen = 8; // w:noBreakHyphen
+    SoftHyphen soft_hyphen = 9;        // w:softHyphen
+    DayShort day_short = 10;           // w:dayShort
+    DayLong day_long = 11;             // w:dayLong
+    MonthShort month_short = 12;       // w:monthShort
+    MonthLong month_long = 13;         // w:monthLong
+    YearShort year_short = 14;         // w:yearShort
+    YearLong year_long = 15;           // w:yearLong
+    AnnotationRef annotation_ref = 16; // w:annotationRef
+    FootnoteRef footnote_ref = 17;     // w:footnoteRef
+    EndnoteRef endnote_ref = 18;       // w:endnoteRef
+    Separator separator = 19;          // w:separator
+    ContinuationSeparator cont_sep = 20; // w:continuationSeparator
+    SymbolChar symbol = 21;            // w:sym
+    PgNum pg_num = 22;                 // w:pgNum (legacy)
+    CarriageReturn cr = 23;            // w:cr
+    Tab tab = 24;                      // w:tab
+    LastRenderedPageBreak last_rendered_page_break = 25;
+    CommentReference comment_ref = 26; // w:commentReference
+    FootnoteReference footnote_reference = 27; // w:footnoteReference
+    EndnoteReference endnote_reference = 28;   // w:endnoteReference
+    Object object = 29;               // w:object
+    Ruby ruby = 30;                   // w:ruby (phonetic guide)
+    EastAsianLayout east_asian_layout = 31; // w:eastAsianLayout (inside rPr but can carry content)
+  }
+}
+
+// w:t — literal text content of a run
+message TextContent {
+  string value = 1;
+  // xml:space="preserve" — must be set when leading/trailing whitespace present
+  bool preserve_space = 2;
+}
+
+message DeletedText {
+  string value = 1;
+  bool preserve_space = 2;
+}
+
+message FieldInstrText {
+  string value = 1;
+  bool preserve_space = 2;
+}
+
+// w:br — break
+message Break {
+  BreakType type = 1;
+  BreakClear clear = 2;  // Only meaningful when type = TEXT_WRAPPING
+}
+
+enum BreakType {
+  BREAK_PAGE = 0;
+  BREAK_COLUMN = 1;
+  BREAK_TEXT_WRAPPING = 2;
+}
+
+enum BreakClear {
+  BREAK_CLEAR_NONE = 0;
+  BREAK_CLEAR_LEFT = 1;
+  BREAK_CLEAR_RIGHT = 2;
+  BREAK_CLEAR_ALL = 3;
+}
+
+// w:fldChar
+message FieldChar {
+  FieldCharType field_char_type = 1;
+  bool dirty = 2;
+  bool lock = 3;
+  // w:ffData — form field data (only in BEGIN)
+  FormFieldData ff_data = 4;
+}
+
+enum FieldCharType {
+  FIELD_CHAR_BEGIN = 0;
+  FIELD_CHAR_SEPARATE = 1;
+  FIELD_CHAR_END = 2;
+}
+
+message FormFieldData {
+  string name = 1;
+  bool enabled = 2;
+  string calculate_on_exit = 3;
+  string entry_macro = 4;
+  string exit_macro = 5;
+  string help_text = 6;
+  string status_text = 7;
+
+  oneof specific {
+    TextFormField text_input = 8;
+    CheckBoxFormField check_box = 9;
+    DropDownFormField drop_down = 10;
+  }
+}
+
+message TextFormField {
+  TextFormFieldType type = 1;
+  string default_value = 2;
+  int32 max_length = 3;
+  string format = 4;
+}
+
+enum TextFormFieldType {
+  TEXT_FORM_REGULAR = 0;
+  TEXT_FORM_NUMBER = 1;
+  TEXT_FORM_DATE = 2;
+  TEXT_FORM_CURRENT_TIME = 3;
+  TEXT_FORM_CURRENT_DATE = 4;
+  TEXT_FORM_CALCULATED = 5;
+}
+
+message CheckBoxFormField {
+  oneof size_spec {
+    int32 size = 1;      // HPC
+    bool auto = 2;
+  }
+  bool default_value = 3;
+  bool checked = 4;
+}
+
+message DropDownFormField {
+  string default_value = 1;
+  int32 result = 2;
+  repeated string list_entry = 3;
+}
+
+// w:sym
+message SymbolChar {
+  string font = 1;
+  int32 char_code = 2;  // Unicode code point (hex in XML)
+}
+
+// Placeholder messages for simple empty elements
+message NoBreakHyphen {}
+message SoftHyphen {}
+message DayShort {}
+message DayLong {}
+message MonthShort {}
+message MonthLong {}
+message YearShort {}
+message YearLong {}
+message AnnotationRef {}
+message FootnoteRef {}
+message EndnoteRef {}
+message Separator {}
+message ContinuationSeparator {}
+message PgNum {}
+message CarriageReturn {}
+message Tab {}
+message LastRenderedPageBreak {}
+
+message CommentReference {
+  int32 id = 1;
+}
+
+message FootnoteReference {
+  int32 id = 1;
+  bool custom_mark_follows = 2;
+}
+
+message EndnoteReference {
+  int32 id = 1;
+  bool custom_mark_follows = 2;
+}
+
+
+// ============================================================================
+// RUN PROPERTIES (w:rPr)
+// ============================================================================
+
+message RunProperties {
+  // w:rStyle — named character style
+  string style_id = 1;
+
+  // w:rFonts — font specification
+  RunFonts fonts = 2;
+
+  // w:b — bold
+  OnOffElement bold = 3;
+
+  // w:bCs — complex script bold
+  OnOffElement bold_cs = 4;
+
+  // w:i — italic
+  OnOffElement italic = 5;
+
+  // w:iCs
+  OnOffElement italic_cs = 6;
+
+  // w:caps — all caps
+  OnOffElement caps = 7;
+
+  // w:smallCaps
+  OnOffElement small_caps = 8;
+
+  // w:strike — single strikethrough
+  OnOffElement strike = 9;
+
+  // w:dstrike — double strikethrough
+  OnOffElement dstrike = 10;
+
+  // w:outline
+  OnOffElement outline = 11;
+
+  // w:shadow
+  OnOffElement shadow = 12;
+
+  // w:emboss
+  OnOffElement emboss = 13;
+
+  // w:imprint — engraved
+  OnOffElement imprint = 14;
+
+  // w:noProof — suppress spelling and grammar
+  OnOffElement no_proof = 15;
+
+  // w:snapToGrid
+  OnOffElement snap_to_grid = 16;
+
+  // w:vanish — hidden text
+  OnOffElement vanish = 17;
+
+  // w:webHidden
+  OnOffElement web_hidden = 18;
+
+  // w:color
+  DocxColor color = 19;
+
+  // w:spacing — character spacing (DXA, can be negative)
+  int32 spacing = 20;
+
+  // w:w — character width as % of normal (50–200)
+  int32 width_percent = 21;
+
+  // w:kern — auto-kerning threshold (HPC; 0 = no auto-kern)
+  int32 kern = 22;
+
+  // w:position — vertical position (HPC; positive = raised, negative = lowered)
+  int32 position = 23;
+
+  // w:sz — font size (HPC)
+  int32 sz = 24;
+
+  // w:szCs — complex script font size (HPC)
+  int32 sz_cs = 25;
+
+  // w:highlight
+  HighlightColor highlight = 26;
+
+  // w:u — underline
+  Underline underline = 27;
+
+  // w:effect — text effect (glow, shadow, etc.)
+  TextEffect effect = 28;
+
+  // w:bdr — run border
+  RunBorder border = 29;
+
+  // w:shd — run shading
+  DocxShading shading = 30;
+
+  // w:fitText — fit text into a fixed width
+  FitText fit_text = 31;
+
+  // w:vertAlign — superscript/subscript
+  VerticalAlignment vert_align = 32;
+
+  // w:rtl — right-to-left run
+  OnOffElement rtl = 33;
+
+  // w:cs — complex script run
+  OnOffElement cs = 34;
+
+  // w:em — emphasis mark (East Asian)
+  EmphasisMark em = 35;
+
+  // w:lang — language
+  Language lang = 36;
+
+  // w:eastAsianLayout
+  EastAsianLayout east_asian_layout = 37;
+
+  // w:specVanish — paragraph mark special vanish
+  OnOffElement spec_vanish = 38;
+
+  // w:oMath — math run
+  OnOffElement o_math = 39;
+
+  // Change tracking for run properties (w:rPrChange)
+  RunPropertiesChange rpr_change = 40;
+
+  // w:del markup — run property is being deleted
+  TrackedChangeInfo del = 41;
+}
+
+message RunPropertiesChange {
+  int32 id = 1;
+  string author = 2;
+  string date = 3;
+  RunProperties old_rpr = 4;
+}
+
+// w:rFonts
+message RunFonts {
+  string ascii = 1;
+  string h_ansi = 2;
+  string east_asia = 3;
+  string cs = 4;
+  FontHint hint = 5;
+  string ascii_theme = 6;
+  string h_ansi_theme = 7;
+  string east_asia_theme = 8;
+  string cs_theme = 9;
+}
+
+enum FontHint {
+  FONT_HINT_DEFAULT = 0;
+  FONT_HINT_EAST_ASIA = 1;
+  FONT_HINT_CS = 2;
+}
+
+message DocxColor {
+  // 0xRRGGBB or -1 for "auto"
+  int32 rgb = 1;
+  ThemeColor theme_color = 2;
+  int32 theme_tint = 3;   // 0–255
+  int32 theme_shade = 4;  // 0–255
+}
+
+enum HighlightColor {
+  HIGHLIGHT_NONE = 0;
+  HIGHLIGHT_BLACK = 1;
+  HIGHLIGHT_BLUE = 2;
+  HIGHLIGHT_CYAN = 3;
+  HIGHLIGHT_DARK_BLUE = 4;
+  HIGHLIGHT_DARK_CYAN = 5;
+  HIGHLIGHT_DARK_GRAY = 6;
+  HIGHLIGHT_DARK_GREEN = 7;
+  HIGHLIGHT_DARK_MAGENTA = 8;
+  HIGHLIGHT_DARK_RED = 9;
+  HIGHLIGHT_DARK_YELLOW = 10;
+  HIGHLIGHT_GREEN = 11;
+  HIGHLIGHT_LIGHT_GRAY = 12;
+  HIGHLIGHT_MAGENTA = 13;
+  HIGHLIGHT_NONE_VALUE = 14;
+  HIGHLIGHT_RED = 15;
+  HIGHLIGHT_WHITE = 16;
+  HIGHLIGHT_YELLOW = 17;
+}
+
+message Underline {
+  UnderlineStyle val = 1;
+  DocxColor color = 2;
+  ThemeColor theme_color = 3;
+}
+
+enum UnderlineStyle {
+  UNDERLINE_NONE = 0;
+  UNDERLINE_SINGLE = 1;
+  UNDERLINE_WORDS = 2;
+  UNDERLINE_DOUBLE = 3;
+  UNDERLINE_THICK = 4;
+  UNDERLINE_DOTTED = 5;
+  UNDERLINE_DOTTED_HEAVY = 6;
+  UNDERLINE_DASH = 7;
+  UNDERLINE_DASHED_HEAVY = 8;
+  UNDERLINE_DASH_LONG = 9;
+  UNDERLINE_DASH_LONG_HEAVY = 10;
+  UNDERLINE_DOT_DASH = 11;
+  UNDERLINE_DOT_DASH_HEAVY = 12;
+  UNDERLINE_DOT_DOT_DASH = 13;
+  UNDERLINE_DOT_DOT_DASH_HEAVY = 14;
+  UNDERLINE_WAVY = 15;
+  UNDERLINE_WAVY_HEAVY = 16;
+  UNDERLINE_WAVY_DOUBLE = 17;
+}
+
+enum TextEffect {
+  option allow_alias = true;
+  TEXT_EFFECT_NONE = 0;
+  TEXT_EFFECT_BLINKING_BACKGROUND = 1;
+  TEXT_EFFECT_LIGHTS = 2;
+  TEXT_EFFECT_ANTSBLACK = 3;
+  TEXT_EFFECT_ANTSRED = 4;
+  TEXT_EFFECT_SHIMMER = 3;  // alias for ANTSBLACK per OOXML spec
+  TEXT_EFFECT_SPARKLE = 5;
+}
+
+message RunBorder {
+  BorderStyle style = 1;
+  DocxColor color = 2;
+  int32 size = 3;
+  int32 space = 4;
+  bool shadow = 5;
+  bool frame = 6;
+}
+
+message FitText {
+  int32 width = 1;   // DXA
+  int32 id = 2;
+}
+
+enum VerticalAlignment {
+  VERT_ALIGN_BASELINE = 0;
+  VERT_ALIGN_SUPERSCRIPT = 1;
+  VERT_ALIGN_SUBSCRIPT = 2;
+}
+
+message EmphasisMark {
+  EmphasisMarkType val = 1;
+}
+
+enum EmphasisMarkType {
+  EM_NONE = 0;
+  EM_DOT = 1;
+  EM_COMMA = 2;
+  EM_CIRCLE = 3;
+  EM_UNDER_DOT = 4;
+}
+
+message Language {
+  string val = 1;    // BCP 47 language tag (e.g., "en-US")
+  string east_asia = 2;
+  string bidi = 3;
+}
+
+message EastAsianLayout {
+  bool combine = 1;
+  bool combine_brackets = 2;
+  bool horizontal_in_vertical = 3;
+  bool vertical = 4;
+  bool vert_compress = 5;
+  int32 id = 6;
+}
+
+message Ruby {
+  RubyProperties ruby_pr = 1;
+  RubyContent rt = 2;     // phonetic (ruby text)
+  RubyContent base = 3;   // base text
+}
+
+message RubyProperties {
+  RubyAlignValue ruby_align = 1;
+  int32 hps = 2;           // HPC — ruby font size
+  int32 hps_raise = 3;     // HPC — vertical position
+  int32 hps_base_text = 4;
+  Language lang = 5;
+  bool dirty = 6;
+}
+
+enum RubyAlignValue {
+  RUBY_ALIGN_CENTER = 0;
+  RUBY_ALIGN_DISTRIBUTE_LETTER = 1;
+  RUBY_ALIGN_DISTRIBUTE_SPACE = 2;
+  RUBY_ALIGN_LEFT = 3;
+  RUBY_ALIGN_RIGHT = 4;
+  RUBY_ALIGN_RIGHT_VERTICAL = 5;
+}
+
+message RubyContent {
+  repeated Run runs = 1;
+}
+
+
+// ============================================================================
+// HYPERLINK (w:hyperlink)
+// ============================================================================
+
+message Hyperlink {
+  // r:id — external relationship ID (for external URLs)
+  string relationship_id = 1;
+
+  // w:anchor — internal bookmark anchor
+  string anchor = 2;
+
+  // w:docLocation
+  string doc_location = 3;
+
+  // w:history — add to history (default: true)
+  bool history = 4;
+
+  // Tooltip
+  string tooltip = 5;
+
+  // Content (runs, SDTs, etc.)
+  repeated ParagraphChild content = 6;
+}
+
+
+// ============================================================================
+// TABLE (w:tbl)
+// ============================================================================
+
+message Table {
+  // w:tblPr
+  TableProperties properties = 1;
+
+  // w:tblGrid
+  TableGrid grid = 2;
+
+  // Rows and bookmarks/etc. at table level
+  repeated TableChild content = 3;
+}
+
+message TableChild {
+  oneof child {
+    TableRow row = 1;
+    BookmarkStart bookmark_start = 2;
+    BookmarkEnd bookmark_end = 3;
+    TrackedChangeInsertion ins = 4;
+    TrackedChangeDeletion del = 5;
+    CommentRangeStart comment_range_start = 6;
+    CommentRangeEnd comment_range_end = 7;
+  }
+}
+
+// w:tblPr
+message TableProperties {
+  // w:tblStyle — named table style
+  string style_id = 1;
+
+  // w:tblpPr — floating table positioning
+  TablePositionProperties tblp_pr = 2;
+
+  // w:tblOverlap
+  TableOverlapValue tbl_overlap = 3;
+
+  // w:bidiVisual
+  OnOffElement bidi_visual = 4;
+
+  // w:tblStyleRowBandSize
+  int32 style_row_band_size = 5;
+
+  // w:tblStyleColBandSize
+  int32 style_col_band_size = 6;
+
+  // w:tblW — preferred table width
+  TableWidth width = 7;
+
+  // w:jc — table alignment
+  JustificationValue jc = 8;
+
+  // w:tblCellSpacing — cell spacing
+  TableWidth cell_spacing = 9;
+
+  // w:tblInd — table indent from margin
+  TableWidth ind = 10;
+
+  // w:tblBorders
+  TableBorders borders = 11;
+
+  // w:shd — table-level shading
+  DocxShading shading = 12;
+
+  // w:tblLayout — table layout algorithm
+  TableLayout layout = 13;
+
+  // w:tblCellMar — default cell margins
+  TableCellMargins cell_margins = 14;
+
+  // w:tblLook — conditional formatting application flags
+  TableLook look = 15;
+
+  // w:tblCaption
+  string caption = 16;
+
+  // w:tblDescription
+  string description = 17;
+
+  // Change tracking for table properties
+  TablePropertiesChange tbl_pr_change = 18;
+}
+
+message TablePropertiesChange {
+  int32 id = 1;
+  string author = 2;
+  string date = 3;
+  TableProperties old_tbl_pr = 4;
+}
+
+message TablePositionProperties {
+  int32 left_from_text = 1;   // DXA
+  int32 right_from_text = 2;
+  int32 top_from_text = 3;
+  int32 bottom_from_text = 4;
+  int32 vert_anchor = 5;
+  int32 horz_anchor = 6;
+  int32 tbl_p_x = 7;    // DXA
+  int32 tbl_p_y = 8;
+  TablePositionX tbl_p_x_spec = 9;
+  TablePositionY tbl_p_y_spec = 10;
+}
+
+enum TablePositionX {
+  TABLE_POS_X_CENTER = 0;
+  TABLE_POS_X_INSIDE = 1;
+  TABLE_POS_X_LEFT = 2;
+  TABLE_POS_X_OUTSIDE = 3;
+  TABLE_POS_X_RIGHT = 4;
+}
+
+enum TablePositionY {
+  TABLE_POS_Y_BOTTOM = 0;
+  TABLE_POS_Y_CENTER = 1;
+  TABLE_POS_Y_INLINE = 2;
+  TABLE_POS_Y_INSIDE = 3;
+  TABLE_POS_Y_OUTSIDE = 4;
+  TABLE_POS_Y_TOP = 5;
+}
+
+enum TableOverlapValue {
+  TABLE_OVERLAP_NEVER = 0;
+  TABLE_OVERLAP_OVERLAP = 1;
+}
+
+// w:tblW, used for multiple width-type attributes
+message TableWidth {
+  TableWidthType type = 1;
+  int32 w = 2;   // DXA for "dxa", percentage * 50 for "pct", 0 for "auto" / "nil"
+}
+
+enum TableWidthType {
+  TABLE_WIDTH_NIL = 0;
+  TABLE_WIDTH_AUTO = 1;
+  TABLE_WIDTH_DXA = 2;
+  TABLE_WIDTH_PCT = 3;   // Fiftieths of a percent
+}
+
+message TableGrid {
+  repeated TableGridColumn columns = 1;
+  TableGridChange grid_change = 2;
+}
+
+message TableGridColumn {
+  int32 w = 1;  // DXA
+}
+
+message TableGridChange {
+  int32 id = 1;
+  string author = 2;
+  string date = 3;
+  TableGrid original_grid = 4;
+}
+
+message TableBorders {
+  TableBorder top = 1;
+  TableBorder left = 2;
+  TableBorder bottom = 3;
+  TableBorder right = 4;
+  TableBorder inside_h = 5;
+  TableBorder inside_v = 6;
+}
+
+message TableBorder {
+  BorderStyle style = 1;
+  DocxColor color = 2;
+  int32 size = 3;    // Eighths of a point
+  int32 space = 4;   // Points
+  bool shadow = 5;
+  bool frame = 6;
+}
+
+message TableLayout {
+  TableLayoutType type = 1;
+}
+
+enum TableLayoutType {
+  TABLE_LAYOUT_AUTOFIT = 0;
+  TABLE_LAYOUT_FIXED = 1;
+}
+
+message TableCellMargins {
+  TableWidth top = 1;
+  TableWidth left = 2;
+  TableWidth bottom = 3;
+  TableWidth right = 4;
+}
+
+// w:tblLook — 16-bit bitfield governing which conditional formats are active
+message TableLook {
+  bool first_row = 1;
+  bool last_row = 2;
+  bool first_column = 3;
+  bool last_column = 4;
+  bool no_h_band = 5;
+  bool no_v_band = 6;
+  string val = 7;  // Raw hex value, e.g. "04A0"
+}
+
+// ============================================================================
+// TABLE ROW (w:tr)
+// ============================================================================
+
+message TableRow {
+  // w:trPr
+  TableRowProperties properties = 1;
+
+  // Cells and markup within the row
+  repeated TableRowChild content = 2;
+
+  // w:rsidR, etc.
+  RevisionSaveIds rsid = 3;
+}
+
+message TableRowChild {
+  oneof child {
+    TableCell cell = 1;
+    BookmarkStart bookmark_start = 2;
+    BookmarkEnd bookmark_end = 3;
+    TrackedChangeInsertion ins = 4;
+    TrackedChangeDeletion del = 5;
+    CommentRangeStart comment_range_start = 6;
+    CommentRangeEnd comment_range_end = 7;
+  }
+}
+
+// w:trPr
+message TableRowProperties {
+  // w:cnfStyle — conditional formatting style bits (12-bit hex string)
+  string cnf_style = 1;
+
+  // w:divId
+  int32 div_id = 2;
+
+  // w:gridBefore / w:gridAfter — skipped grid columns
+  int32 grid_before = 3;
+  int32 grid_after = 4;
+
+  // w:wBefore / w:wAfter — width consumed by skipped columns
+  TableWidth w_before = 5;
+  TableWidth w_after = 6;
+
+  // w:cantSplit — row cannot be split across pages
+  OnOffElement cant_split = 7;
+
+  // w:trHeight
+  TableRowHeight tr_height = 8;
+
+  // w:tblHeader — repeat row as table header
+  OnOffElement tbl_header = 9;
+
+  // w:tblCellSpacing
+  TableWidth cell_spacing = 10;
+
+  // w:jc
+  JustificationValue jc = 11;
+
+  // w:hidden
+  OnOffElement hidden = 12;
+
+  // Change tracking for row properties
+  TableRowPropertiesChange trpr_change = 13;
+
+  // Tracked row insertion/deletion
+  TrackedChangeInfo ins = 14;
+  TrackedChangeInfo del = 15;
+}
+
+message TableRowPropertiesChange {
+  int32 id = 1;
+  string author = 2;
+  string date = 3;
+  TableRowProperties old_trpr = 4;
+}
+
+message TableRowHeight {
+  int32 val = 1;           // DXA
+  HeightRule h_rule = 2;
+}
+
+enum HeightRule {
+  HEIGHT_RULE_AUTO = 0;
+  HEIGHT_RULE_AT_LEAST = 1;
+  HEIGHT_RULE_EXACT = 2;
+}
+
+
+// ============================================================================
+// TABLE CELL (w:tc)
+// ============================================================================
+
+message TableCell {
+  // w:tcPr
+  TableCellProperties properties = 1;
+
+  // Block-level content within the cell
+  repeated BlockLevelElement content = 2;
+}
+
+// w:tcPr
+message TableCellProperties {
+  // w:cnfStyle
+  string cnf_style = 1;
+
+  // w:tcW — preferred cell width
+  TableWidth width = 2;
+
+  // w:gridSpan — number of grid columns this cell spans
+  int32 grid_span = 3;
+
+  // w:hMerge — horizontal merge
+  HorizontalMerge h_merge = 4;
+
+  // w:vMerge — vertical merge
+  VerticalMerge v_merge = 5;
+
+  // w:tcBorders
+  TableCellBorders borders = 6;
+
+  // w:shd
+  DocxShading shading = 7;
+
+  // w:noWrap
+  OnOffElement no_wrap = 8;
+
+  // w:tcMar — cell-level margins (override table default)
+  TableCellMargins margins = 9;
+
+  // w:textDirection
+  TextDirectionValue text_direction = 10;
+
+  // w:tcFitText
+  OnOffElement fit_text = 11;
+
+  // w:vAlign — vertical alignment
+  VerticalAlignValue v_align = 12;
+
+  // w:hideMark — suppress paragraph mark contribution to row height
+  OnOffElement hide_mark = 13;
+
+  // w:headers — list of header cell IDs (accessibility)
+  repeated string headers = 14;
+
+  // Change tracking for cell properties
+  TableCellPropertiesChange tcpr_change = 15;
+}
+
+message TableCellPropertiesChange {
+  int32 id = 1;
+  string author = 2;
+  string date = 3;
+  TableCellProperties old_tcpr = 4;
+}
+
+enum HorizontalMerge {
+  H_MERGE_NONE = 0;
+  H_MERGE_RESTART = 1;   // First cell in merge group (w:hMerge w:val="restart")
+  H_MERGE_CONTINUE = 2;  // Continuation cell (w:hMerge with no val)
+}
+
+enum VerticalMerge {
+  V_MERGE_NONE = 0;
+  V_MERGE_RESTART = 1;
+  V_MERGE_CONTINUE = 2;
+}
+
+enum VerticalAlignValue {
+  V_ALIGN_TOP = 0;
+  V_ALIGN_CENTER = 1;
+  V_ALIGN_BOTTOM = 2;
+}
+
+message TableCellBorders {
+  TableBorder top = 1;
+  TableBorder left = 2;
+  TableBorder bottom = 3;
+  TableBorder right = 4;
+  TableBorder inside_h = 5;
+  TableBorder inside_v = 6;
+  TableBorder tl_2_br = 7;   // Diagonal top-left to bottom-right
+  TableBorder tr_2_bl = 8;   // Diagonal top-right to bottom-left
+}
+
+
+// ============================================================================
+// SECTION PROPERTIES (w:sectPr)
+// ============================================================================
+
+message SectionProperties {
+  // w:footnotePr — footnote properties for this section
+  SectionFootnotePr footnote_pr = 1;
+
+  // w:endnotePr
+  SectionEndnotePr endnote_pr = 2;
+
+  // w:type — section break type
+  SectionType type = 3;
+
+  // w:pgSz — page size
+  PageSize pg_sz = 4;
+
+  // w:pgMar — page margins
+  PageMargin pg_mar = 5;
+
+  // w:paperSrc — paper source (printer tray IDs)
+  PaperSource paper_src = 6;
+
+  // w:pgBorders — page borders
+  PageBorders pg_borders = 7;
+
+  // w:lnNumType — line numbering
+  LineNumbering ln_num_type = 8;
+
+  // w:pgNumType — page numbering
+  PageNumbering pg_num_type = 9;
+
+  // w:cols — multi-column layout
+  Columns cols = 10;
+
+  // w:formProt — document protection for this section
+  OnOffElement form_prot = 11;
+
+  // w:vAlign — vertical page alignment
+  VerticalAlignValue v_align = 12;
+
+  // w:noEndnote
+  OnOffElement no_endnote = 13;
+
+  // w:titlePg — different first page header/footer
+  OnOffElement title_pg = 14;
+
+  // w:textDirection
+  TextDirectionValue text_direction = 15;
+
+  // w:bidi
+  OnOffElement bidi = 16;
+
+  // w:rtlGutter
+  OnOffElement rtl_gutter = 17;
+
+  // w:docGrid — document grid
+  DocumentGrid doc_grid = 18;
+
+  // w:printerSettings relationship ID
+  string printer_settings_rid = 19;
+
+  // Header/footer references
+  repeated HeaderReference header_references = 20;
+  repeated FooterReference footer_references = 21;
+
+  // w:sectPrChange — change tracking
+  SectionPropertiesChange sect_pr_change = 22;
+
+  // r:id — for sub-document references
+  string relationship_id = 23;
+}
+
+enum SectionType {
+  SECTION_NEXT_PAGE = 0;
+  SECTION_NEXT_COLUMN = 1;
+  SECTION_CONTINUOUS = 2;
+  SECTION_EVEN_PAGE = 3;
+  SECTION_ODD_PAGE = 4;
+}
+
+message PageSize {
+  int32 w = 1;      // DXA
+  int32 h = 2;      // DXA
+  PageOrientation orient = 3;
+  int32 code = 4;   // Paper code (1 = Letter, 9 = A4, etc.)
+}
+
+enum PageOrientation {
+  PAGE_ORIENT_PORTRAIT = 0;
+  PAGE_ORIENT_LANDSCAPE = 1;
+}
+
+message PageMargin {
+  int32 top = 1;      // DXA
+  int32 right = 2;
+  int32 bottom = 3;
+  int32 left = 4;
+  int32 header = 5;   // DXA — distance from paper edge to header
+  int32 footer = 6;   // DXA
+  int32 gutter = 7;
+}
+
+message PaperSource {
+  int32 first = 1;
+  int32 other = 2;
+}
+
+message PageBorders {
+  PageBorderDisplay display = 1;
+  PageBorderOffset offset_from = 2;
+  bool z_order_front = 3;
+  PageBorderBorder top = 4;
+  PageBorderBorder left = 5;
+  PageBorderBorder bottom = 6;
+  PageBorderBorder right = 7;
+}
+
+enum PageBorderDisplay {
+  PAGE_BORDER_ALL_PAGES = 0;
+  PAGE_BORDER_FIRST_PAGE = 1;
+  PAGE_BORDER_NOT_FIRST_PAGE = 2;
+}
+
+enum PageBorderOffset {
+  PAGE_BORDER_OFFSET_PAGE = 0;
+  PAGE_BORDER_OFFSET_TEXT = 1;
+}
+
+message PageBorderBorder {
+  BorderStyle style = 1;
+  DocxColor color = 2;
+  int32 size = 3;
+  int32 space = 4;
+  bool shadow = 5;
+  bool frame = 6;
+  // Art border (numbered reference into border art table)
+  int32 art = 7;
+}
+
+message LineNumbering {
+  LineNumberingRestartValue restart = 1;
+  int32 line_starting_number = 2;
+  int32 distance = 3;    // DXA — distance from text
+  int32 count_by = 4;    // Number interval
+}
+
+enum LineNumberingRestartValue {
+  LINE_NUM_RESTART_NEW_PAGE = 0;
+  LINE_NUM_RESTART_NEW_SECTION = 1;
+  LINE_NUM_RESTART_CONTINUOUS = 2;
+}
+
+message PageNumbering {
+  NumberingFormat fmt = 1;
+  int32 start = 2;
+  string chapter_separator = 3;
+  int32 chapter_style = 4;
+}
+
+message Columns {
+  int32 num = 1;
+  int32 space = 2;         // DXA — default spacing between columns
+  bool equal_width = 3;
+  bool separate = 4;       // Draw separator line between columns
+  repeated Column col = 5;
+}
+
+message Column {
+  int32 w = 1;      // DXA
+  int32 space = 2;  // DXA — trailing space after this column
+}
+
+message DocumentGrid {
+  DocumentGridType type = 1;
+  int32 line_pitch = 2;   // Hundredths of a point
+  int32 char_space = 3;   // Hundredths of a character width
+}
+
+enum DocumentGridType {
+  DOC_GRID_DEFAULT = 0;
+  DOC_GRID_LINES = 1;
+  DOC_GRID_LINES_AND_CHARS = 2;
+  DOC_GRID_SNAP_TO_CHARS = 3;
+}
+
+message HeaderReference {
+  HeaderFooterType type = 1;
+  string relationship_id = 2;
+}
+
+message FooterReference {
+  HeaderFooterType type = 1;
+  string relationship_id = 2;
+}
+
+enum HeaderFooterType {
+  HF_DEFAULT = 0;
+  HF_EVEN = 1;
+  HF_FIRST = 2;
+}
+
+message SectionPropertiesChange {
+  int32 id = 1;
+  string author = 2;
+  string date = 3;
+  SectionProperties old_sect_pr = 4;
+}
+
+message SectionFootnotePr {
+  NumberingFormat num_fmt = 1;
+  int32 num_start = 2;
+  RestartNumber num_restart = 3;
+  FootnotePosition pos = 4;
+}
+
+message SectionEndnotePr {
+  NumberingFormat num_fmt = 1;
+  int32 num_start = 2;
+  RestartNumber num_restart = 3;
+  EndnotePosition pos = 4;
+}
+
+enum FootnotePosition {
+  FOOTNOTE_POS_PAGE_BOTTOM = 0;
+  FOOTNOTE_POS_BELOW_TEXT = 1;
+}
+
+enum EndnotePosition {
+  ENDNOTE_POS_SECTION_END = 0;
+  ENDNOTE_POS_DOC_END = 1;
+}
+
+enum RestartNumber {
+  RESTART_CONTINUOUS = 0;
+  RESTART_EACH_SECTION = 1;
+  RESTART_EACH_PAGE = 2;
+}
+
+
+// ============================================================================
+// TRACKED CHANGES
+// ============================================================================
+
+message TrackedChangeInfo {
+  int32 id = 1;
+  string author = 2;
+  string date = 3;     // ISO 8601
+}
+
+// w:ins at paragraph level — runs/paragraphs being inserted
+message TrackedChangeInsertion {
+  TrackedChangeInfo info = 1;
+  repeated ParagraphChild content = 2;
+}
+
+// w:del at paragraph level — runs/paragraphs being deleted
+message TrackedChangeDeletion {
+  TrackedChangeInfo info = 1;
+  repeated ParagraphChild content = 2;
+}
+
+// w:moveFrom
+message TrackedChangeMoveFrom {
+  TrackedChangeInfo info = 1;
+  repeated ParagraphChild content = 2;
+}
+
+// w:moveTo
+message TrackedChangeMoveTo {
+  TrackedChangeInfo info = 1;
+  repeated ParagraphChild content = 2;
+}
+
+// w:moveFromRangeStart
+message MoveFromRangeStart {
+  int32 id = 1;
+  string author = 2;
+  string date = 3;
+  string name = 4;
+  int32 col_first = 5;
+  int32 col_last = 6;
+}
+
+message MoveFromRangeEnd {
+  int32 id = 1;
+}
+
+message MoveToRangeStart {
+  int32 id = 1;
+  string author = 2;
+  string date = 3;
+  string name = 4;
+  int32 col_first = 5;
+  int32 col_last = 6;
+}
+
+message MoveToRangeEnd {
+  int32 id = 1;
+}
+
+// w:ins / w:del wrapping a run inside a paragraph — alias; uses TrackedChangeInfo
+message FieldCharRun {
+  TrackedChangeInfo ins = 1;
+  Run run = 2;
+}
+
+message FieldInstrRun {
+  TrackedChangeInfo ins = 1;
+  Run run = 2;
+}
+
+
+// ============================================================================
+// BOOKMARKS, PERMISSIONS, PROOFING
+// ============================================================================
+
+message BookmarkStart {
+  int32 id = 1;
+  string name = 2;
+  int32 col_first = 3;
+  int32 col_last = 4;
+  bool dis_placed_bookmark_start = 5;
+}
+
+message BookmarkEnd {
+  int32 id = 1;
+  bool dis_placed_bookmark_end = 2;
+}
+
+message PermStart {
+  int32 id = 1;
+  string editor_group = 2;   // w:edGrp — predefined group
+  string editor = 3;         // w:ed — specific email/alias
+  int32 col_first = 4;
+  int32 col_last = 5;
+}
+
+message PermEnd {
+  int32 id = 1;
+}
+
+// w:proofErr — spell/grammar error marker
+message ProofErr {
+  ProofErrType type = 1;
+}
+
+enum ProofErrType {
+  PROOF_ERR_SPELL_START = 0;
+  PROOF_ERR_SPELL_END = 1;
+  PROOF_ERR_GRAM_START = 2;
+  PROOF_ERR_GRAM_END = 3;
+}
+
+// w:commentRangeStart / w:commentRangeEnd
+message CommentRangeStart {
+  int32 id = 1;
+}
+
+message CommentRangeEnd {
+  int32 id = 1;
+}
+
+
+// ============================================================================
+// COMMENTS (word/comments.xml)
+// ============================================================================
+
+message CommentsPart {
+  repeated Comment comments = 1;
+}
+
+message Comment {
+  int32 id = 1;
+  string author = 2;
+  string date = 3;
+  string initials = 4;
+  repeated BlockLevelElement content = 5;
+  // w:paraIdParent — for replies (references parent comment's paragraph ID)
+  string para_id_parent = 6;
+  string para_id = 7;
+  string text_id = 8;
+  bool done = 9;   // w:done — comment resolved
+}
+
+
+// ============================================================================
+// FOOTNOTES & ENDNOTES
+// ============================================================================
+
+message FootnotesPart {
+  repeated Footnote footnotes = 1;
+}
+
+message EndnotesPart {
+  repeated Endnote endnotes = 1;
+}
+
+message Footnote {
+  int32 id = 1;
+  FootnoteType type = 2;
+  repeated BlockLevelElement content = 3;
+}
+
+message Endnote {
+  int32 id = 1;
+  EndnoteType type = 2;
+  repeated BlockLevelElement content = 3;
+}
+
+enum FootnoteType {
+  FOOTNOTE_NORMAL = 0;
+  FOOTNOTE_SEPARATOR = 1;
+  FOOTNOTE_CONTINUATION_SEPARATOR = 2;
+  FOOTNOTE_CONTINUATION_NOTICE = 3;
+}
+
+enum EndnoteType {
+  ENDNOTE_NORMAL = 0;
+  ENDNOTE_SEPARATOR = 1;
+  ENDNOTE_CONTINUATION_SEPARATOR = 2;
+  ENDNOTE_CONTINUATION_NOTICE = 3;
+}
+
+
+// ============================================================================
+// HEADERS & FOOTERS
+// ============================================================================
+
+message HeaderPart {
+  string relationship_id = 1;
+  repeated BlockLevelElement content = 2;
+}
+
+message FooterPart {
+  string relationship_id = 1;
+  repeated BlockLevelElement content = 2;
+}
+
+
+// ============================================================================
+// DRAWING / IMAGES (w:drawing, DrawingML)
+// ============================================================================
+
+message Drawing {
+  oneof placement {
+    InlineDrawing inline = 1;
+    AnchoredDrawing anchor = 2;
+  }
+}
+
+// wp:inline
+message InlineDrawing {
+  int64 dist_t = 1;   // EMU — distance from text top
+  int64 dist_b = 2;
+  int64 dist_l = 3;
+  int64 dist_r = 4;
+  DrawingExtent extent = 5;
+  DrawingEffectExtent effect_extent = 6;
+  DrawingDocPr doc_pr = 7;
+  DrawingGraphicFrameLocks graphic_frame_locks = 8;
+  GraphicObject graphic = 9;
+}
+
+// wp:anchor
+message AnchoredDrawing {
+  int64 dist_t = 1;
+  int64 dist_b = 2;
+  int64 dist_l = 3;
+  int64 dist_r = 4;
+  bool simple_pos = 5;
+  int32 relative_height = 6;
+  bool behind_doc = 7;
+  bool locked = 8;
+  bool layout_in_cell = 9;
+  bool hidden = 10;
+  bool allow_overlap = 11;
+  DrawingSimplePosition simple_position = 12;
+  DrawingHorizontalPosition horizontal_position = 13;
+  DrawingVerticalPosition vertical_position = 14;
+  DrawingExtent extent = 15;
+  DrawingEffectExtent effect_extent = 16;
+  WrapType wrap = 17;
+  DrawingDocPr doc_pr = 18;
+  DrawingGraphicFrameLocks graphic_frame_locks = 19;
+  GraphicObject graphic = 20;
+}
+
+message DrawingSimplePosition {
+  int64 x = 1;   // EMU
+  int64 y = 2;
+}
+
+message DrawingHorizontalPosition {
+  HorizontalRelativeFrom relative_from = 1;
+  oneof h_pos {
+    HorizontalAlignment h_align = 2;
+    int64 pos_offset = 3;     // EMU
+    PctPosition pct = 4;
+  }
+}
+
+message DrawingVerticalPosition {
+  VerticalRelativeFrom relative_from = 1;
+  oneof v_pos {
+    VerticalAlignment v_align = 2;
+    int64 pos_offset = 3;
+    PctPosition pct = 4;
+  }
+}
+
+message PctPosition {
+  int32 pct = 1;   // Thousandths of a percent
+}
+
+enum HorizontalRelativeFrom {
+  H_FROM_MARGIN = 0;
+  H_FROM_PAGE = 1;
+  H_FROM_COLUMN = 2;
+  H_FROM_CHARACTER = 3;
+  H_FROM_LEFT_MARGIN = 4;
+  H_FROM_RIGHT_MARGIN = 5;
+  H_FROM_INSIDE_MARGIN = 6;
+  H_FROM_OUTSIDE_MARGIN = 7;
+}
+
+enum VerticalRelativeFrom {
+  V_FROM_MARGIN = 0;
+  V_FROM_PAGE = 1;
+  V_FROM_PARAGRAPH = 2;
+  V_FROM_LINE = 3;
+  V_FROM_TOP_MARGIN = 4;
+  V_FROM_BOTTOM_MARGIN = 5;
+  V_FROM_INSIDE_MARGIN = 6;
+  V_FROM_OUTSIDE_MARGIN = 7;
+}
+
+enum HorizontalAlignment {
+  H_ALIGN_LEFT = 0;
+  H_ALIGN_RIGHT = 1;
+  H_ALIGN_CENTER = 2;
+  H_ALIGN_INSIDE = 3;
+  H_ALIGN_OUTSIDE = 4;
+}
+
+enum DrawingVerticalAlignment {
+  D_V_ALIGN_TOP = 0;
+  D_V_ALIGN_BOTTOM = 1;
+  D_V_ALIGN_CENTER = 2;
+  D_V_ALIGN_INSIDE = 3;
+  D_V_ALIGN_OUTSIDE = 4;
+}
+
+message DrawingExtent {
+  int64 cx = 1;   // EMU
+  int64 cy = 2;
+}
+
+message DrawingEffectExtent {
+  int64 l = 1;
+  int64 t = 2;
+  int64 r = 3;
+  int64 b = 4;
+}
+
+message DrawingDocPr {
+  int32 id = 1;
+  string name = 2;
+  string descr = 3;
+  bool hidden = 4;
+  string title = 5;
+}
+
+message DrawingGraphicFrameLocks {
+  bool no_change_aspect = 1;
+}
+
+// wp:wrapType hierarchy
+message WrapType {
+  oneof wrap {
+    WrapNone wrap_none = 1;
+    WrapSquare wrap_square = 2;
+    WrapTight wrap_tight = 3;
+    WrapThrough wrap_through = 4;
+    WrapTopBottom wrap_top_bottom = 5;
+  }
+}
+
+message WrapNone {}
+
+message WrapSquare {
+  WrapText wrap_text = 1;
+  int64 dist_t = 2;
+  int64 dist_b = 3;
+  int64 dist_l = 4;
+  int64 dist_r = 5;
+}
+
+message WrapTight {
+  WrapText wrap_text = 1;
+  int64 dist_l = 2;
+  int64 dist_r = 3;
+  WrapPolygon wrap_polygon = 4;
+}
+
+message WrapThrough {
+  WrapText wrap_text = 1;
+  int64 dist_l = 2;
+  int64 dist_r = 3;
+  WrapPolygon wrap_polygon = 4;
+}
+
+message WrapTopBottom {
+  int64 dist_t = 1;
+  int64 dist_b = 2;
+}
+
+message WrapPolygon {
+  bool edited = 1;
+  WrapPoint start = 2;
+  repeated WrapPoint line_to = 3;
+}
+
+message WrapPoint {
+  int64 x = 1;
+  int64 y = 2;
+}
+
+enum WrapText {
+  WRAP_TEXT_BOTH_SIDES = 0;
+  WRAP_TEXT_LEFT = 1;
+  WRAP_TEXT_RIGHT = 2;
+  WRAP_TEXT_LARGEST = 3;
+}
+
+// a:graphic / a:graphicData  — DrawingML graphic container
+message GraphicObject {
+  oneof data {
+    PictureGraphic picture = 1;
+    DiagramGraphic diagram = 2;
+    ChartGraphic chart = 3;
+    TableGraphic table = 4;
+    LockedCanvasGraphic locked_canvas = 5;
+  }
+}
+
+// pic:pic — a DrawingML picture
+message PictureGraphic {
+  PicNonVisualProperties nv_pic_pr = 1;
+  BlipFill blip_fill = 2;
+  PicShapeProperties sp_pr = 3;
+}
+
+message PicNonVisualProperties {
+  DrawingDocPr c_nv_pr = 1;
+  PicNonVisualPictureProperties c_nv_pic_pr = 2;
+}
+
+message PicNonVisualPictureProperties {
+  bool pref_rel_size = 1;
+  PicLocks pic_locks = 2;
+}
+
+message PicLocks {
+  bool no_change_aspect = 1;
+  bool no_change_arrowheads = 2;
+  bool no_change_shape_type = 3;
+  bool no_crop = 4;
+}
+
+message BlipFill {
+  Blip blip = 1;
+  SourceRectangle src_rect = 2;
+  oneof fill_mode {
+    StretchFill stretch = 3;
+    TileFill tile = 4;
+  }
+}
+
+message Blip {
+  string embed_relationship_id = 1;   // r:embed
+  string link_relationship_id = 2;    // r:link
+  BlipCompression cstate = 3;
+  repeated BlipEffect effects = 4;
+}
+
+enum BlipCompression {
+  BLIP_COMPRESS_NONE = 0;
+  BLIP_COMPRESS_EMAIL = 1;
+  BLIP_COMPRESS_SCREEN = 2;
+  BLIP_COMPRESS_PRINT = 3;
+  BLIP_COMPRESS_HQ_PRINT = 4;
+}
+
+message BlipEffect {
+  oneof effect {
+    AlphaModulateFixed alpha_mod_fix = 1;
+    Duotone duotone = 2;
+    Grayscale grayscale = 3;
+    LuminanceModulation lum_mod = 4;
+  }
+}
+
+message AlphaModulateFixed {
+  int32 amt = 1;   // 1000ths of a percent (100000 = 100%)
+}
+
+message Duotone {
+  repeated DocxColor colors = 1;
+}
+
+message Grayscale {}
+
+message LuminanceModulation {
+  int32 bright = 1;
+  int32 contrast = 2;
+}
+
+message SourceRectangle {
+  int32 l = 1;   // 1000ths of a percent
+  int32 t = 2;
+  int32 r = 3;
+  int32 b = 4;
+}
+
+message StretchFill {
+  SourceRectangle fill_rect = 1;
+}
+
+message TileFill {
+  int64 tx = 1;
+  int64 ty = 2;
+  int32 sx = 3;
+  int32 sy = 4;
+  FlipMode flip = 5;
+  RectAlignment algn = 6;
+}
+
+enum FlipMode {
+  FLIP_NONE = 0;
+  FLIP_X = 1;
+  FLIP_Y = 2;
+  FLIP_XY = 3;
+}
+
+enum RectAlignment {
+  RECT_ALIGN_TL = 0;
+  RECT_ALIGN_T = 1;
+  RECT_ALIGN_TR = 2;
+  RECT_ALIGN_L = 3;
+  RECT_ALIGN_CTR = 4;
+  RECT_ALIGN_R = 5;
+  RECT_ALIGN_BL = 6;
+  RECT_ALIGN_B = 7;
+  RECT_ALIGN_BR = 8;
+}
+
+// a:spPr — shape properties
+message PicShapeProperties {
+  Transform2D xfrm = 1;
+  oneof geometry {
+    PresetGeometry prst_geom = 2;
+    CustomGeometry cust_geom = 3;
+  }
+  oneof fill {
+    NoFill no_fill = 4;
+    SolidFill solid_fill = 5;
+    GradientFill grad_fill = 6;
+    BlipFillProperty blip_fill = 7;
+    PatternFill patt_fill = 8;
+  }
+  ShapeOutline ln = 9;
+  ShapeEffectList effect_lst = 10;
+}
+
+message Transform2D {
+  int32 rot = 1;      // 60000ths of a degree
+  bool flip_h = 2;
+  bool flip_v = 3;
+  Point2D off = 4;
+  PositiveSize2D ext = 5;
+}
+
+message Point2D {
+  int64 x = 1;   // EMU
+  int64 y = 2;
+}
+
+message PositiveSize2D {
+  int64 cx = 1;
+  int64 cy = 2;
+}
+
+message PresetGeometry {
+  ShapeType prst = 1;
+  repeated AdjustValue avLst = 2;
+}
+
+message AdjustValue {
+  string name = 1;
+  string fmla = 2;
+}
+
+// CustomGeometry is extensive; abbreviated here
+message CustomGeometry {
+  repeated AdjustValue avLst = 1;
+  bytes path_data = 2;   // Serialized path commands
+}
+
+// Fill types
+message NoFill {}
+
+message SolidFill {
+  oneof color {
+    RgbColor rgb_clr = 1;
+    SchemeColor scheme_clr = 2;
+    SystemColor sys_clr = 3;
+    PresetColor prst_clr = 4;
+    HslColor hsl_clr = 5;
+  }
+}
+
+message RgbColor {
+  int32 val = 1;   // 0xRRGGBB
+  repeated ColorTransform mods = 2;
+}
+
+message SchemeColor {
+  SchemeColorVal val = 1;
+  repeated ColorTransform mods = 2;
+}
+
+enum SchemeColorVal {
+  SCHEME_COLOR_BG1 = 0;
+  SCHEME_COLOR_TX1 = 1;
+  SCHEME_COLOR_BG2 = 2;
+  SCHEME_COLOR_TX2 = 3;
+  SCHEME_COLOR_ACCENT1 = 4;
+  SCHEME_COLOR_ACCENT2 = 5;
+  SCHEME_COLOR_ACCENT3 = 6;
+  SCHEME_COLOR_ACCENT4 = 7;
+  SCHEME_COLOR_ACCENT5 = 8;
+  SCHEME_COLOR_ACCENT6 = 9;
+  SCHEME_COLOR_HLINK = 10;
+  SCHEME_COLOR_FOLHLINK = 11;
+  SCHEME_COLOR_PHCLR = 12;
+  SCHEME_COLOR_DK1 = 13;
+  SCHEME_COLOR_LT1 = 14;
+  SCHEME_COLOR_DK2 = 15;
+  SCHEME_COLOR_LT2 = 16;
+}
+
+message SystemColor {
+  string val = 1;
+  int32 last_clr = 2;
+}
+
+message PresetColor {
+  string val = 1;
+  repeated ColorTransform mods = 2;
+}
+
+message HslColor {
+  int32 hue = 1;
+  int32 sat = 2;
+  int32 lum = 3;
+  repeated ColorTransform mods = 4;
+}
+
+message ColorTransform {
+  oneof transform {
+    int32 tint = 1;
+    int32 shade = 2;
+    int32 comp = 3;
+    int32 inv = 4;
+    int32 gray = 5;
+    int32 alpha = 6;
+    int32 alpha_mod = 7;
+    int32 alpha_off = 8;
+    int32 hueMod = 9;
+    int32 hueOff = 10;
+    int32 lumMod = 11;
+    int32 lumOff = 12;
+    int32 satMod = 13;
+    int32 satOff = 14;
+    int32 red = 15;
+    int32 redMod = 16;
+    int32 green = 17;
+    int32 greenMod = 18;
+    int32 blue = 19;
+    int32 blueMod = 20;
+    int32 gamma = 21;
+    int32 inv_gamma = 22;
+  }
+}
+
+message GradientFill {
+  repeated GradientStop gs_lst = 1;
+  oneof gradient {
+    LinearGradient lin = 2;
+    PathGradient path = 3;
+  }
+  TileRect tile_rect = 4;
+}
+
+message GradientStop {
+  int32 pos = 1;   // 1000ths of a percent
+  SolidFill color = 2;
+}
+
+message LinearGradient {
+  int32 ang = 1;    // 60000ths of a degree
+  bool scaled = 2;
+}
+
+message PathGradient {
+  GradientPath path = 1;
+  FillToRect fill_to_rect = 2;
+}
+
+enum GradientPath {
+  GRADIENT_PATH_SHAPE = 0;
+  GRADIENT_PATH_CIRCLE = 1;
+  GRADIENT_PATH_RECT = 2;
+}
+
+message FillToRect {
+  int32 l = 1;
+  int32 t = 2;
+  int32 r = 3;
+  int32 b = 4;
+}
+
+message TileRect {
+  int32 l = 1;
+  int32 t = 2;
+  int32 r = 3;
+  int32 b = 4;
+}
+
+message BlipFillProperty {
+  BlipFill blip_fill = 1;
+}
+
+message PatternFill {
+  string prst = 1;
+  SolidFill fg_clr = 2;
+  SolidFill bg_clr = 3;
+}
+
+message ShapeOutline {
+  int32 w = 1;   // EMU
+  oneof fill {
+    NoFill no_fill = 2;
+    SolidFill solid_fill = 3;
+    GradientFill grad_fill = 4;
+    PatternFill patt_fill = 5;
+  }
+  LineDash prstDash = 6;
+  LineJoin join = 7;
+  LineEnd head_end = 8;
+  LineEnd tail_end = 9;
+}
+
+message LineDash {
+  string val = 1;  // "solid", "dot", "dash", "lgDash", etc.
+}
+
+message LineJoin {
+  oneof join {
+    RoundJoin round = 1;
+    BevelJoin bevel = 2;
+    MiterJoin miter = 3;
+  }
+}
+
+message RoundJoin {}
+message BevelJoin {}
+message MiterJoin { int32 lim = 1; }
+
+message LineEnd {
+  LineEndType type = 1;
+  LineEndWidth w = 2;
+  LineEndLength len = 3;
+}
+
+enum LineEndType {
+  LINE_END_NONE = 0;
+  LINE_END_TRIANGLE = 1;
+  LINE_END_STEALTH = 2;
+  LINE_END_DIAMOND = 3;
+  LINE_END_OVAL = 4;
+  LINE_END_ARROW = 5;
+}
+
+enum LineEndWidth {
+  LINE_END_WIDTH_SM = 0;
+  LINE_END_WIDTH_MED = 1;
+  LINE_END_WIDTH_LG = 2;
+}
+
+enum LineEndLength {
+  LINE_END_LENGTH_SM = 0;
+  LINE_END_LENGTH_MED = 1;
+  LINE_END_LENGTH_LG = 2;
+}
+
+message ShapeEffectList {
+  OuterShadow outer_shadow = 1;
+  InnerShadow inner_shadow = 2;
+  Reflection reflection = 3;
+  Glow glow = 4;
+  SoftEdge soft_edge = 5;
+}
+
+message OuterShadow {
+  int64 blur_rad = 1;
+  int64 dist = 2;
+  int32 dir = 3;
+  int32 sx = 4;
+  int32 sy = 5;
+  int32 kx = 6;
+  int32 ky = 7;
+  bool align = 8;
+  bool rot_with_shape = 9;
+  SolidFill color = 10;
+}
+
+message InnerShadow {
+  int64 blur_rad = 1;
+  int64 dist = 2;
+  int32 dir = 3;
+  SolidFill color = 4;
+}
+
+message Reflection {
+  int64 blur_rad = 1;
+  int32 stA = 2;
+  int32 stPos = 3;
+  int32 endA = 4;
+  int32 endPos = 5;
+  int64 dist = 6;
+  int32 dir = 7;
+  int32 fadeDir = 8;
+  int32 sx = 9;
+  int32 sy = 10;
+  bool rot_with_shape = 11;
+}
+
+message Glow {
+  int64 rad = 1;
+  SolidFill color = 2;
+}
+
+message SoftEdge {
+  int64 rad = 1;
+}
+
+// Placeholder messages for complex graphic types
+message DiagramGraphic {
+  string relationship_id = 1;
+}
+
+message ChartGraphic {
+  string relationship_id = 1;
+}
+
+message TableGraphic {
+  repeated bytes table_data = 1; // Serialized DrawingML table
+}
+
+message LockedCanvasGraphic {
+  bytes canvas_data = 1;
+}
+
+enum ShapeType {
+  // Abbreviated; ECMA-376 defines ~200 preset shapes
+  SHAPE_RECT = 0;
+  SHAPE_ROUNDED_RECT = 1;
+  SHAPE_ELLIPSE = 2;
+  SHAPE_TRIANGLE = 3;
+  SHAPE_RIGHT_TRIANGLE = 4;
+  SHAPE_PARALLELOGRAM = 5;
+  SHAPE_TRAPEZOID = 6;
+  SHAPE_PENTAGON = 7;
+  SHAPE_HEXAGON = 8;
+  SHAPE_HEPTAGON = 9;
+  SHAPE_OCTAGON = 10;
+  SHAPE_DIAMOND = 11;
+  SHAPE_ARROW_RIGHT = 12;
+  SHAPE_ARROW_LEFT = 13;
+  SHAPE_ARROW_UP = 14;
+  SHAPE_ARROW_DOWN = 15;
+  SHAPE_STAR_4 = 16;
+  SHAPE_STAR_5 = 17;
+  SHAPE_STAR_6 = 18;
+  SHAPE_STAR_8 = 19;
+  SHAPE_LINE = 20;
+  SHAPE_CALLOUT_1 = 21;
+  SHAPE_CALLOUT_2 = 22;
+  SHAPE_CALLOUT_3 = 23;
+  SHAPE_BEVEL = 24;
+  SHAPE_DONUT = 25;
+  SHAPE_NO_SMOKING = 26;
+}
+
+// Legacy VML picture (w:pict)
+message Picture {
+  bytes vml_data = 1;   // Raw VML XML bytes
+}
+
+// Embedded object (w:object)
+message Object {
+  bytes ole_data = 1;
+  string relationship_id = 2;
+  string prog_id = 3;
+  string draw_aspect = 4;
+  string object_id = 5;
+  string type = 6;
+  bytes shape_data = 7;   // wp:inline or VML fallback
+}
+
+
+// ============================================================================
+// STYLES (word/styles.xml)
+// ============================================================================
+
+message Styles {
+  // w:docDefaults
+  DocDefaults doc_defaults = 1;
+
+  // w:latentStyles
+  LatentStyles latent_styles = 2;
+
+  // w:style entries
+  repeated Style styles = 3;
+}
+
+message DocDefaults {
+  RunPropertiesDefault rpr_default = 1;
+  ParagraphPropertiesDefault ppr_default = 2;
+}
+
+message RunPropertiesDefault {
+  RunProperties rpr = 1;
+}
+
+message ParagraphPropertiesDefault {
+  ParagraphProperties ppr = 1;
+}
+
+message LatentStyles {
+  int32 default_locked_state = 1;
+  int32 default_ui_priority = 2;
+  bool default_semi_hidden = 3;
+  bool default_unhide_when_used = 4;
+  bool default_q_format = 5;
+  int32 count = 6;
+  repeated LsdException lsd_exceptions = 7;
+}
+
+message LsdException {
+  string name = 1;
+  bool locked = 2;
+  int32 ui_priority = 3;
+  bool semi_hidden = 4;
+  bool unhide_when_used = 5;
+  bool q_format = 6;
+}
+
+// w:style
+message Style {
+  StyleType type = 1;
+  string style_id = 2;
+  bool is_default = 3;
+  bool custom_style = 4;
+
+  // w:name
+  string name = 5;
+
+  // w:aliases
+  repeated string aliases = 6;
+
+  // w:basedOn
+  string based_on = 7;
+
+  // w:next
+  string next = 8;
+
+  // w:link — linked character/paragraph style
+  string link = 9;
+
+  // w:autoRedefine
+  bool auto_redefine = 10;
+
+  // w:hidden
+  bool hidden = 11;
+
+  // w:uiPriority
+  int32 ui_priority = 12;
+
+  // w:semiHidden
+  bool semi_hidden = 13;
+
+  // w:unhideWhenUsed
+  bool unhide_when_used = 14;
+
+  // w:qFormat — show in quick style gallery
+  bool q_format = 15;
+
+  // w:locked
+  bool locked = 16;
+
+  // w:personal / w:personalCompose / w:personalReply
+  bool personal = 17;
+  bool personal_compose = 18;
+  bool personal_reply = 19;
+
+  // w:rsid
+  int32 rsid = 20;
+
+  // w:pPr
+  ParagraphProperties ppr = 21;
+
+  // w:rPr
+  RunProperties rpr = 22;
+
+  // w:tblPr (for table styles)
+  TableProperties tbl_pr = 23;
+
+  // w:trPr (for table styles)
+  TableRowProperties tr_pr = 24;
+
+  // w:tcPr (for table styles)
+  TableCellProperties tc_pr = 25;
+
+  // w:tblStylePr — conditional table style formatting
+  repeated TableStylePr tbl_style_prs = 26;
+}
+
+enum StyleType {
+  STYLE_PARAGRAPH = 0;
+  STYLE_CHARACTER = 1;
+  STYLE_TABLE = 2;
+  STYLE_NUMBERING = 3;
+}
+
+// w:tblStylePr — conditional format for a specific part of the table
+message TableStylePr {
+  TableStyleOverrideType type = 1;
+  ParagraphProperties ppr = 2;
+  RunProperties rpr = 3;
+  TableProperties tbl_pr = 4;
+  TableRowProperties tr_pr = 5;
+  TableCellProperties tc_pr = 6;
+}
+
+enum TableStyleOverrideType {
+  TSO_WHOLE_TABLE = 0;
+  TSO_FIRST_ROW = 1;
+  TSO_LAST_ROW = 2;
+  TSO_FIRST_COL = 3;
+  TSO_LAST_COL = 4;
+  TSO_BAND1_VERT = 5;
+  TSO_BAND2_VERT = 6;
+  TSO_BAND1_HORZ = 7;
+  TSO_BAND2_HORZ = 8;
+  TSO_NE_CELL = 9;
+  TSO_NW_CELL = 10;
+  TSO_SE_CELL = 11;
+  TSO_SW_CELL = 12;
+}
+
+
+// ============================================================================
+// NUMBERING (word/numbering.xml)
+// ============================================================================
+
+message Numbering {
+  repeated AbstractNum abstract_nums = 1;
+  repeated Num nums = 2;
+  repeated NumberingPicBullet pic_bullets = 3;
+}
+
+message NumberingPicBullet {
+  int32 num_pic_bullet_id = 1;
+  Drawing drawing = 2;
+}
+
+// w:abstractNum — defines the formatting template
+message AbstractNum {
+  int32 abstract_num_id = 1;
+  string nsid = 2;          // 8-digit hex namespace ID
+  string multi_level_type = 3;  // "singleLevel", "multilevel", "hybridMultilevel"
+  string tmpl = 4;          // 8-digit hex template code
+  string name = 5;
+  string style_link = 6;    // w:styleLink
+  string num_style_link = 7; // w:numStyleLink
+  repeated Level levels = 8;
+}
+
+// w:lvl — numbering level definition (0–8)
+message Level {
+  int32 ilvl = 1;
+
+  // w:start — starting value
+  int32 start = 2;
+
+  // w:numFmt — numbering format
+  NumberingFormat num_fmt = 3;
+
+  // w:lvlRestart
+  int32 lvl_restart = 4;
+
+  // w:pStyle — associate with a paragraph style
+  string pstyle = 5;
+
+  // w:isLgl — legal numbering style (decimal override)
+  bool is_lgl = 6;
+
+  // w:suff — suffix after number (tab, space, nothing)
+  LevelSuffix suff = 7;
+
+  // w:lvlText — level text pattern (e.g., "%1.%2.")
+  LevelText lvl_text = 8;
+
+  // w:lvlJc
+  JustificationValue lvl_jc = 9;
+
+  // w:pPr
+  ParagraphProperties ppr = 10;
+
+  // w:rPr
+  RunProperties rpr = 11;
+
+  // w:lvlPicBulletId
+  int32 lvl_pic_bullet_id = 12;
+
+  // Level override (can be used inline in w:num)
+  LevelOverride level_override = 13;
+}
+
+message LevelText {
+  string val = 1;     // Pattern, e.g. "%1." or "•"
+  bool null_value = 2;
+}
+
+enum LevelSuffix {
+  LEVEL_SUFFIX_TAB = 0;
+  LEVEL_SUFFIX_SPACE = 1;
+  LEVEL_SUFFIX_NOTHING = 2;
+}
+
+// w:num — instance that references an abstractNum and can override levels
+message Num {
+  int32 num_id = 1;
+  int32 abstract_num_id = 2;
+  repeated LevelOverride lvl_overrides = 3;
+}
+
+message LevelOverride {
+  int32 ilvl = 1;
+  int32 start_override = 2;
+  Level lvl = 3;   // Full level override
+}
+
+enum NumberingFormat {
+  NUM_FMT_DECIMAL = 0;
+  NUM_FMT_UPPER_ROMAN = 1;
+  NUM_FMT_LOWER_ROMAN = 2;
+  NUM_FMT_UPPER_LETTER = 3;
+  NUM_FMT_LOWER_LETTER = 4;
+  NUM_FMT_ORDINAL = 5;
+  NUM_FMT_CARDINAL_TEXT = 6;
+  NUM_FMT_ORDINAL_TEXT = 7;
+  NUM_FMT_HEX = 8;
+  NUM_FMT_CHICAGO = 9;
+  NUM_FMT_IDEOGRAPH_DIGITAL = 10;
+  NUM_FMT_JAPANESE_COUNTING = 11;
+  NUM_FMT_AIUEO = 12;
+  NUM_FMT_IROHA = 13;
+  NUM_FMT_DECIMAL_FULL_WIDTH = 14;
+  NUM_FMT_DECIMAL_HALF_WIDTH = 15;
+  NUM_FMT_JAPANESE_LEGAL = 16;
+  NUM_FMT_JAPANESE_DIGITAL_TEN_THOUSAND = 17;
+  NUM_FMT_DECIMAL_ENCLOSED_CIRCLE = 18;
+  NUM_FMT_DECIMAL_FULL_WIDTH2 = 19;
+  NUM_FMT_AIUEO_FULL_WIDTH = 20;
+  NUM_FMT_IROHA_FULL_WIDTH = 21;
+  NUM_FMT_DECIMAL_ZERO = 22;
+  NUM_FMT_BULLET = 23;
+  NUM_FMT_GANADA = 24;
+  NUM_FMT_CHOSUNG = 25;
+  NUM_FMT_DECIMAL_ENCLOSED_FULL_STOP = 26;
+  NUM_FMT_DECIMAL_ENCLOSED_PAREN = 27;
+  NUM_FMT_DECIMAL_ENCLOSED_CIRCLE_CHINESE = 28;
+  NUM_FMT_IDEOGRAPH_ENCLOSED_CIRCLE = 29;
+  NUM_FMT_IDEOGRAPH_TRADITIONAL = 30;
+  NUM_FMT_IDEOGRAPH_ZODIAC = 31;
+  NUM_FMT_IDEOGRAPH_ZODIAC_TRADITIONAL = 32;
+  NUM_FMT_TAIWANESE_COUNTING = 33;
+  NUM_FMT_IDEOGRAPH_LEGAL_TRADITIONAL = 34;
+  NUM_FMT_TAIWANESE_COUNTING_THOUSAND = 35;
+  NUM_FMT_TAIWANESE_DIGITAL = 36;
+  NUM_FMT_CHINESE_COUNTING = 37;
+  NUM_FMT_CHINESE_LEGAL_SIMPLIFIED = 38;
+  NUM_FMT_CHINESE_COUNTING_THOUSAND = 39;
+  NUM_FMT_KOREAN_DIGITAL = 40;
+  NUM_FMT_KOREAN_COUNTING = 41;
+  NUM_FMT_KOREAN_LEGAL = 42;
+  NUM_FMT_KOREAN_DIGITAL2 = 43;
+  NUM_FMT_VIETNAMESE_COUNTING = 44;
+  NUM_FMT_RUSSIAN_LOWER = 45;
+  NUM_FMT_RUSSIAN_UPPER = 46;
+  NUM_FMT_NONE = 47;
+  NUM_FMT_NUMBER_IN_DASH = 48;
+  NUM_FMT_HEBREW1 = 49;
+  NUM_FMT_HEBREW2 = 50;
+  NUM_FMT_ARABIC_ALPHA = 51;
+  NUM_FMT_ARABIC_ABJAD = 52;
+  NUM_FMT_HINDI_VOWELS = 53;
+  NUM_FMT_HINDI_CONSONANTS = 54;
+  NUM_FMT_HINDI_NUMBERS = 55;
+  NUM_FMT_HINDI_COUNTING = 56;
+  NUM_FMT_THAI_LETTERS = 57;
+  NUM_FMT_THAI_NUMBERS = 58;
+  NUM_FMT_THAI_COUNTING = 59;
+  NUM_FMT_BAHT_TEXT = 60;
+  NUM_FMT_DOLLAR_TEXT = 61;
+  NUM_FMT_CUSTOM = 62;
+}
+
+
+// ============================================================================
+// SETTINGS (word/settings.xml)
+// ============================================================================
+
+message Settings {
+  // w:writeProtection
+  WriteProtection write_protection = 1;
+
+  // w:view
+  ViewSettings view = 2;
+
+  // w:zoom
+  Zoom zoom = 3;
+
+  // w:removePersonalInformation
+  OnOffElement remove_personal_information = 4;
+
+  // w:removeDateAndTime
+  OnOffElement remove_date_and_time = 5;
+
+  // w:doNotDisplayPageBoundaries
+  OnOffElement do_not_display_page_boundaries = 6;
+
+  // w:displayBackgroundShape
+  OnOffElement display_background_shape = 7;
+
+  // w:printPostScriptOverText
+  OnOffElement print_post_script_over_text = 8;
+
+  // w:printFractionalCharacterWidth
+  OnOffElement print_fractional_char_width = 9;
+
+  // w:printFormsData
+  OnOffElement print_forms_data = 10;
+
+  // w:embedTrueTypeFonts
+  OnOffElement embed_true_type_fonts = 11;
+
+  // w:embedSystemFonts
+  OnOffElement embed_system_fonts = 12;
+
+  // w:saveSubsetFonts
+  OnOffElement save_subset_fonts = 13;
+
+  // w:saveFormsData
+  OnOffElement save_forms_data = 14;
+
+  // w:mirrorMargins
+  OnOffElement mirror_margins = 15;
+
+  // w:alignBordersAndEdges
+  OnOffElement align_borders_and_edges = 16;
+
+  // w:bordersDoNotSurroundHeader / w:bordersDoNotSurroundFooter
+  OnOffElement borders_do_not_surround_header = 17;
+  OnOffElement borders_do_not_surround_footer = 18;
+
+  // w:gutterAtTop
+  OnOffElement gutter_at_top = 19;
+
+  // w:hideSpellingErrors / w:hideGrammaticalErrors
+  OnOffElement hide_spelling_errors = 20;
+  OnOffElement hide_grammatical_errors = 21;
+
+  // w:activeWritingStyle
+  repeated ActiveWritingStyle active_writing_styles = 22;
+
+  // w:proofState
+  ProofState proof_state = 23;
+
+  // w:formsDesign
+  OnOffElement forms_design = 24;
+
+  // w:attachedTemplate
+  string attached_template_rid = 25;
+
+  // w:linkStyles
+  OnOffElement link_styles = 26;
+
+  // w:stylePaneFormatFilter
+  StylePaneFormatFilter style_pane_format_filter = 27;
+
+  // w:stylePaneSortMethod
+  StylePaneSortMethod style_pane_sort_method = 28;
+
+  // w:documentType
+  DocumentType document_type = 29;
+
+  // w:mailMerge
+  MailMerge mail_merge = 30;
+
+  // w:revisionView
+  RevisionView revision_view = 31;
+
+  // w:trackChanges
+  OnOffElement track_changes = 32;
+
+  // w:defaultTabStop — default tab stop interval (DXA)
+  int32 default_tab_stop = 33;
+
+  // w:autoHyphenation
+  OnOffElement auto_hyphenation = 34;
+
+  // w:consecutiveHyphenLimit
+  int32 consecutive_hyphen_limit = 35;
+
+  // w:hyphenationZone (DXA)
+  int32 hyphenation_zone = 36;
+
+  // w:doNotHyphenateCaps
+  OnOffElement do_not_hyphenate_caps = 37;
+
+  // w:showDel / w:showIns / w:showMarkup
+  OnOffElement show_del = 38;
+  OnOffElement show_ins = 39;
+  OnOffElement show_markup = 40;
+
+  // w:printTwoOnOne
+  OnOffElement print_two_on_one = 41;
+
+  // w:strictFirstAndLastChars
+  OnOffElement strict_first_and_last_chars = 42;
+
+  // w:noLineBreaksAfter / w:noLineBreaksBefore (kinsoku tables)
+  string no_line_breaks_after = 43;
+  string no_line_breaks_before = 44;
+
+  // w:savePreviewPicture
+  OnOffElement save_preview_picture = 45;
+
+  // w:doNotValidateAgainstSchema
+  OnOffElement do_not_validate_against_schema = 46;
+
+  // w:saveInvalidXml
+  OnOffElement save_invalid_xml = 47;
+
+  // w:ignoreMixedContent
+  OnOffElement ignore_mixed_content = 48;
+
+  // w:alwaysShowPlaceholderText
+  OnOffElement always_show_placeholder_text = 49;
+
+  // w:doNotDemarcateInvalidXml
+  OnOffElement do_not_demarcate_invalid_xml = 50;
+
+  // w:saveXmlDataOnly
+  OnOffElement save_xml_data_only = 51;
+
+  // w:useXSLTWhenSaving
+  OnOffElement use_xslt_when_saving = 52;
+
+  // w:saveThroughXSLT
+  SaveThroughXslt save_through_xslt = 53;
+
+  // w:showXMLTags
+  OnOffElement show_xml_tags = 54;
+
+  // w:alwaysMergeEmptyNamespace
+  OnOffElement always_merge_empty_namespace = 55;
+
+  // w:updateFields
+  OnOffElement update_fields = 56;
+
+  // w:footnotePr — document-wide footnote settings
+  FootnoteProperties footnote_pr = 57;
+
+  // w:endnotePr
+  EndnoteProperties endnote_pr = 58;
+
+  // w:compat — compatibility settings
+  Compatibility compat = 59;
+
+  // w:docVars — document variables
+  repeated DocVar doc_vars = 60;
+
+  // w:rsids — revision save ID table
+  RsidRoot rsids = 61;
+
+  // w:mathPr — math settings
+  MathProperties math_pr = 62;
+
+  // w:attachedSchema
+  repeated AttachedSchema attached_schemas = 63;
+
+  // w:themeFontLang
+  Language theme_font_lang = 64;
+
+  // w:clrSchemeMapping
+  ColorSchemeMapping clr_scheme_mapping = 65;
+
+  // w:doNotIncludeSubdocsInStats
+  OnOffElement do_not_include_subdocs_in_stats = 66;
+
+  // w:doNotAutoCompressPictures
+  OnOffElement do_not_auto_compress_pictures = 67;
+
+  // w:forceUpgrade
+  bool force_upgrade = 68;
+
+  // w:captions
+  Captions captions = 69;
+
+  // w:readModeInkLockDown
+  ReadModeInkLockDown read_mode_ink_lock_down = 70;
+
+  // w:smartTagType
+  repeated SmartTagType smart_tag_types = 71;
+
+  // w:schemaLibrary
+  SchemaLibrary schema_library = 72;
+
+  // w:shapeDefaults
+  ShapeDefaults shape_defaults = 73;
+
+  // w:doNotEmbedSmartTags
+  OnOffElement do_not_embed_smart_tags = 74;
+
+  // w:decimalSymbol
+  string decimal_symbol = 75;
+
+  // w:listSeparator
+  string list_separator = 76;
+}
+
+message WriteProtection {
+  bool recommended = 1;
+  string hash_value = 2;
+  string salt_value = 3;
+  int32 spin_count = 4;
+  string algorithm_name = 5;
+}
+
+message ViewSettings {
+  ViewType val = 1;
+}
+
+enum ViewType {
+  VIEW_NONE = 0;
+  VIEW_PRINT = 1;
+  VIEW_OUTLINE = 2;
+  VIEW_MASTER_PAGES = 3;
+  VIEW_NORMAL = 4;
+  VIEW_WEB = 5;
+}
+
+message Zoom {
+  ZoomType val = 1;
+  int32 percent = 2;
+}
+
+enum ZoomType {
+  ZOOM_NONE = 0;
+  ZOOM_FULL_PAGE = 1;
+  ZOOM_BEST_FIT = 2;
+  ZOOM_TEXT_FIT = 3;
+}
+
+message ActiveWritingStyle {
+  string lang = 1;
+  string vendor_id = 2;
+  int32 dll_version = 3;
+  bool nl_check = 4;
+  bool check_style = 5;
+  int32 app_name = 6;
+}
+
+message ProofState {
+  ProofStateValue spelling = 1;
+  ProofStateValue grammar = 2;
+}
+
+enum ProofStateValue {
+  PROOF_STATE_CLEAN = 0;
+  PROOF_STATE_DIRTY = 1;
+}
+
+message StylePaneFormatFilter {
+  string val = 1;
+  bool all_styles = 2;
+  bool custom_styles = 3;
+  bool latent_styles = 4;
+  bool styles_in_use = 5;
+  bool heading_styles = 6;
+  bool numbering_styles = 7;
+  bool table_styles = 8;
+  bool direct_formatting_on_runs = 9;
+  bool direct_formatting_on_paragraphs = 10;
+  bool direct_formatting_on_numbering = 11;
+  bool direct_formatting_on_tables = 12;
+  bool clear_formatting = 13;
+  bool top3_heading_styles = 14;
+  bool visible_styles = 15;
+  bool alternate_style_names = 16;
+}
+
+enum StylePaneSortMethod {
+  STYLE_PANE_SORT_NAME = 0;
+  STYLE_PANE_SORT_PRIORITY = 1;
+  STYLE_PANE_SORT_DEFAULT = 2;
+  STYLE_PANE_SORT_FONT = 3;
+  STYLE_PANE_SORT_BASED_ON = 4;
+  STYLE_PANE_SORT_TYPE = 5;
+}
+
+enum DocumentType {
+  DOC_TYPE_NOT_SPECIFIED = 0;
+  DOC_TYPE_LETTER = 1;
+  DOC_TYPE_EMAIL = 2;
+  DOC_TYPE_MEMO = 3;
+  DOC_TYPE_REPORT = 4;
+  DOC_TYPE_PUBLICATION = 5;
+  DOC_TYPE_BOOK = 6;
+  DOC_TYPE_PRESENTATION = 7;
+  DOC_TYPE_GENERIC = 8;
+}
+
+message MailMerge {
+  MailMergeDocType main_document_type = 1;
+  MailMergeLinkType link_to_query = 2;
+  MailMergeDataType data_type = 3;
+  string connect_string = 4;
+  string query = 5;
+  string data_source_rid = 6;
+  string header_source_rid = 7;
+  bool do_not_suppress_blank_lines = 8;
+  MailMergeDestination destination = 9;
+  string address_field_name = 10;
+  string mail_subject = 11;
+  bool mail_as_attachment = 12;
+  bool view_merged_data = 13;
+  int32 active_record = 14;
+  int32 check_errors = 15;
+  repeated OdsoFieldMapData odso_field_maps = 16;
+  bytes odso = 17;
+}
+
+enum MailMergeDocType {
+  MM_DOC_CATALOG = 0;
+  MM_DOC_ENVELOPES = 1;
+  MM_DOC_FORM_LETTERS = 2;
+  MM_DOC_LABELS = 3;
+  MM_DOC_MAILING_LABELS = 4;
+}
+
+enum MailMergeLinkType {
+  MM_LINK_OLE_DB = 0;
+  MM_LINK_DDE = 1;
+  MM_LINK_DDE_AUTO = 2;
+}
+
+enum MailMergeDataType {
+  MM_DATA_NATIVE = 0;
+  MM_DATA_ACCESS = 1;
+  MM_DATA_EXCEL = 2;
+  MM_DATA_ODBC = 3;
+  MM_DATA_QUERY = 4;
+  MM_DATA_TEXT_FILE = 5;
+  MM_DATA_XML = 6;
+}
+
+enum MailMergeDestination {
+  MM_DEST_NEW_DOCUMENT = 0;
+  MM_DEST_PRINTER = 1;
+  MM_DEST_EMAIL = 2;
+  MM_DEST_FAX = 3;
+}
+
+message OdsoFieldMapData {
+  int32 type = 1;
+  string name = 2;
+  int32 mapped_name = 3;
+  int32 column = 4;
+  bool lid = 5;
+  bool dynamic_address = 6;
+}
+
+message RevisionView {
+  bool markup = 1;
+  bool comments = 2;
+  bool display_xml = 3;
+  bool ink_annotations = 4;
+  bool formatting = 5;
+  bool ins_del = 6;
+}
+
+message FootnoteProperties {
+  FootnotePosition pos = 1;
+  NumberingFormat num_fmt = 2;
+  int32 num_start = 3;
+  RestartNumber num_restart = 4;
+}
+
+message EndnoteProperties {
+  EndnotePosition pos = 1;
+  NumberingFormat num_fmt = 2;
+  int32 num_start = 3;
+  RestartNumber num_restart = 4;
+}
+
+message Compatibility {
+  // Hundreds of possible compat flags. Key ones:
+  OnOffElement use_single_borderfor_contiguous_cells = 1;
+  OnOffElement wp_justify_rules = 2;
+  OnOffElement balance_single_byte_double_byte_width = 3;
+  OnOffElement do_not_expand_shift_return = 4;
+  OnOffElement adjust_line_height_in_table = 5;
+  OnOffElement forget_last_tab_alignment = 6;
+  OnOffElement auto_space_like_word95 = 7;
+  OnOffElement no_space_raise_lower = 8;
+  OnOffElement do_not_use_htmlparagraph_auto_spacing = 9;
+  OnOffElement layout_raw_table_width = 10;
+  OnOffElement layout_table_rows_apart = 11;
+  OnOffElement use_word97_line_break_rules = 12;
+  OnOffElement do_not_wrap_text_with_punctuation = 13;
+  OnOffElement do_not_use_east_asian_break_rules = 14;
+  OnOffElement use_word2002_table_style_rules = 15;
+  OnOffElement grow_auto_fit = 16;
+  OnOffElement use_normal_style_for_list = 17;
+  OnOffElement do_not_use_indent_as_numbering_tab_stop = 18;
+  OnOffElement use_alternate_keyboard_shortcuts_for_border_art = 19;
+  OnOffElement auto_space_de_en = 20;
+  OnOffElement adjustSpaceFlowingContent = 21;
+  OnOffElement print_col_black = 22;
+  OnOffElement sp_text_flow_line = 23;
+  OnOffElement no_tab_hang_ind = 24;
+  OnOffElement no_leading = 25;
+  OnOffElement space_for_ul = 26;
+  OnOffElement no_column_balance = 27;
+  OnOffElement balanced_single_byte_double_byte_height = 28;
+  OnOffElement treat_comma_as_period_kana = 29;
+  OnOffElement disable_open_type = 30;
+  int32 compat_setting = 31;   // w:compatSetting name/uri/val (simplified)
+}
+
+message DocVar {
+  string name = 1;
+  string val = 2;
+}
+
+message RsidRoot {
+  string rsid_root = 1;
+  repeated string rsids = 2;
+}
+
+message MathProperties {
+  MathStyle math_style = 1;
+  int32 def_jc = 2;
+  int32 wrap_indent = 3;
+  MathIntLimit int_lim = 4;
+  MathNaryLimit nary_lim = 5;
+}
+
+enum MathStyle {
+  MATH_STYLE_DISPLAY_STYLE = 0;
+  MATH_STYLE_TEXT_STYLE = 1;
+  MATH_STYLE_SCRIPT_STYLE = 2;
+  MATH_STYLE_SCRIPT_SCRIPT_STYLE = 3;
+}
+
+enum MathIntLimit {
+  MATH_INT_LIMIT_UNDER_OVER = 0;
+  MATH_INT_LIMIT_SUB_SUP = 1;
+}
+
+enum MathNaryLimit {
+  MATH_NARY_LIMIT_UNDER_OVER = 0;
+  MATH_NARY_LIMIT_SUB_SUP = 1;
+}
+
+message AttachedSchema {
+  string uri = 1;
+}
+
+message ColorSchemeMapping {
+  string bg1 = 1;
+  string t1 = 2;
+  string bg2 = 3;
+  string t2 = 4;
+  string accent1 = 5;
+  string accent2 = 6;
+  string accent3 = 7;
+  string accent4 = 8;
+  string accent5 = 9;
+  string accent6 = 10;
+  string hyperlink = 11;
+  string followed_hyperlink = 12;
+}
+
+message Captions {
+  repeated Caption captions = 1;
+  repeated AutoCaption auto_captions = 2;
+}
+
+message Caption {
+  string name = 1;
+  CaptionPosition pos = 2;
+  bool ch_num = 3;
+  int32 heading = 4;
+  bool no_label = 5;
+  NumberingFormat num_fmt = 6;
+  string sep = 7;
+}
+
+enum CaptionPosition {
+  CAPTION_ABOVE = 0;
+  CAPTION_BELOW = 1;
+}
+
+message AutoCaption {
+  string name = 1;
+  string caption = 2;
+}
+
+message ReadModeInkLockDown {
+  bool actual_pg = 1;
+  int32 w = 2;
+  int32 h = 3;
+  int32 font_sz = 4;
+}
+
+message SmartTagType {
+  string namespace_uri = 1;
+  string name = 2;
+  string url = 3;
+}
+
+message SchemaLibrary {
+  repeated SchemaElement schema_elements = 1;
+}
+
+message SchemaElement {
+  string uri = 1;
+  string manifest_location = 2;
+  string schema_location = 3;
+}
+
+message ShapeDefaults {
+  bytes sp_data = 1;   // Serialized VML or DrawingML defaults
+}
+
+message SaveThroughXslt {
+  string relationship_id = 1;
+  string solution_id = 2;
+}
+
+
+// ============================================================================
+// FONT TABLE (word/fontTable.xml)
+// ============================================================================
+
+message FontTable {
+  repeated DocxFont fonts = 1;
+}
+
+message DocxFont {
+  string name = 1;
+  FontCharset charset = 2;
+  FontFamily family = 3;
+  bool not_true_type = 4;
+  bool pitch = 5;   // monospaced hint
+  FontPitchValue pitch_value = 6;
+  int32 sig_csr_r1 = 7;    // w:sig Unicode coverage ranges
+  int32 sig_csr_r2 = 8;
+  int32 sig_csr_r3 = 9;
+  int32 sig_csr_r4 = 10;
+  int32 sig_csr_a1 = 11;   // code page ranges
+  int32 sig_csr_a2 = 12;
+  EmbeddedFont embed_regular = 13;
+  EmbeddedFont embed_bold = 14;
+  EmbeddedFont embed_italic = 15;
+  EmbeddedFont embed_bold_italic = 16;
+  AltName alt_name = 17;
+}
+
+message FontCharset {
+  int32 val = 1;    // ANSI charset integer (0 = ANSI_CHARSET)
+  string character_set = 2;
+}
+
+enum FontFamily {
+  FONT_FAMILY_AUTO = 0;
+  FONT_FAMILY_DECORATIVE = 1;
+  FONT_FAMILY_MODERN = 2;
+  FONT_FAMILY_ROMAN = 3;
+  FONT_FAMILY_SCRIPT = 4;
+  FONT_FAMILY_SWISS = 5;
+}
+
+enum FontPitchValue {
+  FONT_PITCH_DEFAULT = 0;
+  FONT_PITCH_FIXED = 1;
+  FONT_PITCH_VARIABLE = 2;
+}
+
+message EmbeddedFont {
+  string relationship_id = 1;
+  string font_key = 2;     // Obfuscation key (hex)
+  SubsetFont subset_font = 3;
+}
+
+message SubsetFont {
+  string relationship_id = 1;
+}
+
+message AltName {
+  string val = 1;
+}
+
+
+// ============================================================================
+// THEME (word/theme/theme1.xml)
+// ============================================================================
+
+message Theme {
+  string name = 1;
+  ThemeElements theme_elements = 2;
+  bytes object_defaults = 3;
+  bytes extra_clr_scheme_lst = 4;
+}
+
+message ThemeElements {
+  ColorScheme clr_scheme = 1;
+  FontScheme font_scheme = 2;
+  FormatScheme fmt_scheme = 3;
+}
+
+message ColorScheme {
+  string name = 1;
+  SolidFill dk1 = 2;
+  SolidFill lt1 = 3;
+  SolidFill dk2 = 4;
+  SolidFill lt2 = 5;
+  SolidFill accent1 = 6;
+  SolidFill accent2 = 7;
+  SolidFill accent3 = 8;
+  SolidFill accent4 = 9;
+  SolidFill accent5 = 10;
+  SolidFill accent6 = 11;
+  SolidFill hlink = 12;
+  SolidFill fol_hlink = 13;
+}
+
+message FontScheme {
+  string name = 1;
+  ThemeFontCollection major_font = 2;
+  ThemeFontCollection minor_font = 3;
+}
+
+message ThemeFontCollection {
+  SupplementalFont latin = 1;
+  SupplementalFont ea = 2;
+  SupplementalFont cs = 3;
+  repeated SupplementalFont fonts = 4;
+}
+
+message SupplementalFont {
+  string script = 1;
+  string typeface = 2;
+  string panose = 3;
+  string pitch_family = 4;
+  string charset = 5;
+}
+
+message FormatScheme {
+  string name = 1;
+  repeated SolidFill fill_style_lst = 2;
+  repeated ShapeOutline ln_style_lst = 3;
+  repeated ShapeEffectList effect_style_lst = 4;
+  repeated SolidFill bg_fill_style_lst = 5;
+}
+
+
+// ============================================================================
+// STRUCTURED DOCUMENT TAGS (w:sdt)
+// ============================================================================
+
+message StructuredDocumentTag {
+  SdtProperties sdt_pr = 1;
+  SdtEndPr sdt_end_pr = 2;
+
+  oneof content {
+    SdtContentBlock sdt_content_block = 3;
+    SdtContentRun sdt_content_run = 4;
+    SdtContentCell sdt_content_cell = 5;
+    SdtContentRow sdt_content_row = 6;
+  }
+}
+
+message SdtProperties {
+  string alias = 1;         // w:alias — display name
+  string tag = 2;           // w:tag — programmatic name
+  int32 id = 3;             // w:id
+  bool lock = 4;
+  SdtLockingValue locking = 5;
+  bool showing_placeholder = 6;
+  SdtDataBinding data_binding = 7;
+  SdtPlaceholder placeholder = 8;
+
+  oneof sdt_type {
+    SdtDate date = 9;
+    SdtDocPart doc_part = 10;
+    SdtComboBox combo_box = 11;
+    SdtDropDownList drop_down_list = 12;
+    SdtPicture picture = 13;
+    SdtRichText rich_text = 14;
+    SdtText text = 15;
+    SdtCheckbox checkbox = 16;
+    SdtCitation citation = 17;
+    SdtGroup group = 18;
+    SdtBibliography bibliography = 19;
+  }
+
+  RunProperties rpr = 20;
+  bool temporary = 21;
+  bool remove_when_edited = 22;
+}
+
+enum SdtLockingValue {
+  SDT_LOCK_NONE = 0;
+  SDT_LOCK_CONTENT_LOCKED = 1;
+  SDT_LOCK_SDT_CONTENT_LOCKED = 2;
+  SDT_LOCK_SDT_LOCKED = 3;
+}
+
+message SdtDataBinding {
+  string prefix_mappings = 1;
+  string xpath = 2;
+  string store_item_id = 3;
+}
+
+message SdtPlaceholder {
+  string doc_part = 1;
+}
+
+message SdtEndPr {
+  RunProperties rpr = 1;
+}
+
+message SdtDate {
+  string full_date = 1;         // ISO 8601
+  SdtDateMappingType date_format = 2;
+  string lid = 3;               // BCP 47
+  CalendarType calendar = 4;
+}
+
+message SdtDateMappingType {
+  string val = 1;   // e.g. "MM/DD/YYYY"
+}
+
+enum CalendarType {
+  CALENDAR_GREGORIAN = 0;
+  CALENDAR_GREGORIAN_ARABIC = 1;
+  CALENDAR_GREGORIAN_XLITERATED_ENGLISH = 2;
+  CALENDAR_GREGORIAN_XLITERATED_FRENCH = 3;
+  CALENDAR_HEBREW = 4;
+  CALENDAR_HIJRI = 5;
+  CALENDAR_JAPAN = 6;
+  CALENDAR_KOREA = 7;
+  CALENDAR_NONE = 8;
+  CALENDAR_SAKA = 9;
+  CALENDAR_TAIWAN = 10;
+  CALENDAR_THAI = 11;
+  CALENDAR_UMALBURA = 12;
+}
+
+message SdtDocPart {
+  string doc_part_gallery = 1;
+  string doc_part_category = 2;
+  string doc_part_unique = 3;
+}
+
+message SdtComboBox {
+  string last_value = 1;
+  repeated SdtListItem list_items = 2;
+}
+
+message SdtDropDownList {
+  string last_value = 1;
+  repeated SdtListItem list_items = 2;
+}
+
+message SdtListItem {
+  string display_text = 1;
+  string value = 2;
+}
+
+message SdtPicture {}
+message SdtRichText {}
+
+message SdtText {
+  bool multi_line = 1;
+}
+
+message SdtCheckbox {
+  SdtCheckboxSymbol checked_state = 1;
+  SdtCheckboxSymbol unchecked_state = 2;
+  bool checked = 3;
+}
+
+message SdtCheckboxSymbol {
+  int32 val = 1;       // Unicode code point
+  string font = 2;
+}
+
+message SdtCitation {}
+message SdtGroup {}
+message SdtBibliography {}
+
+message SdtContentBlock {
+  repeated BlockLevelElement content = 1;
+}
+
+message SdtContentRun {
+  repeated ParagraphChild content = 1;
+}
+
+message SdtContentCell {
+  repeated TableCell cells = 1;
+}
+
+message SdtContentRow {
+  repeated TableRow rows = 1;
+}
+
+
+// ============================================================================
+// FIELDS
+// ============================================================================
+
+// Fields in OOXML are expressed as character runs with fldChar + instrText;
+// this message captures a resolved, semantic field representation.
+message Field {
+  string instruction = 1;    // Full field instruction string, e.g. "PAGE \* MERGEFORMAT"
+  FieldType type = 2;
+  bool dirty = 3;
+  bool locked = 4;
+  // Cached result (the runs between separate and end fldChar)
+  repeated Run result = 5;
+}
+
+enum FieldType {
+  FIELD_UNKNOWN = 0;
+  FIELD_PAGE = 1;
+  FIELD_NUM_PAGES = 2;
+  FIELD_DATE = 3;
+  FIELD_TIME = 4;
+  FIELD_AUTHOR = 5;
+  FIELD_TITLE = 6;
+  FIELD_SUBJECT = 7;
+  FIELD_FILE_NAME = 8;
+  FIELD_TOC = 9;
+  FIELD_TOA = 10;  // Table of Authorities
+  FIELD_INDEX = 11;
+  FIELD_XE = 12;   // Index entry
+  FIELD_TA = 13;   // TOA entry
+  FIELD_TC = 14;   // TOC entry
+  FIELD_REF = 15;
+  FIELD_PAGE_REF = 16;
+  FIELD_HYPER_LINK = 17;
+  FIELD_INCLUDE_TEXT = 18;
+  FIELD_INCLUDE_PICTURE = 19;
+  FIELD_EMBED = 20;
+  FIELD_LINK = 21;
+  FIELD_AUTO_TEXT = 22;
+  FIELD_AUTO_TEXT_LIST = 23;
+  FIELD_SEQ = 24;
+  FIELD_STYLE_REF = 25;
+  FIELD_DOC_PROPERTY = 26;
+  FIELD_INFO = 27;
+  FIELD_MERGE_FIELD = 28;
+  FIELD_NEXT = 29;
+  FIELD_NEXT_IF = 30;
+  FIELD_SKIP_IF = 31;
+  FIELD_FILL_IN = 32;
+  FIELD_IF = 33;
+  FIELD_COMPARE = 34;
+  FIELD_SYMBOL = 35;
+  FIELD_ASK = 36;
+  FIELD_SET = 37;
+  FIELD_EQ = 38;
+  FIELD_ADVANCE = 39;
+  FIELD_BIDI_OUTLINE = 40;
+  FIELD_DATABASE = 41;
+  FIELD_FORMULA = 42;
+  FIELD_GLOSSARY = 43;
+  FIELD_GOTO_BUTTON = 44;
+  FIELD_NOTE_REF = 45;
+  FIELD_MACRO_BUTTON = 46;
+  FIELD_PRINT = 47;
+  FIELD_QUOTE = 48;
+  FIELD_RD = 49;
+  FIELD_SAVE_DATE = 50;
+  FIELD_CREATE_DATE = 51;
+  FIELD_EDIT_TIME = 52;
+  FIELD_NUM_CHARS = 53;
+  FIELD_NUM_WORDS = 54;
+  FIELD_SECTION = 55;
+  FIELD_SECTION_PAGES = 56;
+  FIELD_SHAPE = 57;
+  FIELD_USER_ADDRESS = 58;
+  FIELD_USER_INITIALS = 59;
+  FIELD_USER_NAME = 60;
+}
+
+
+// ============================================================================
+// MISCELLANEOUS STRUCTURES
+// ============================================================================
+
+// w:shd — shading applied to a paragraph, run, or table cell
+message DocxShading {
+  DocxShadingPattern val = 1;
+  DocxColor color = 2;
+  DocxColor fill = 3;
+  ThemeColor theme_color = 4;
+  ThemeColor theme_fill = 5;
+  int32 theme_tint = 6;
+  int32 theme_shade = 7;
+  int32 theme_fill_tint = 8;
+  int32 theme_fill_shade = 9;
+}
+
+enum DocxShadingPattern {
+  SHADING_NIL = 0;
+  SHADING_CLEAR = 1;
+  SHADING_SOLID = 2;
+  SHADING_HORZ_STRIPE = 3;
+  SHADING_VERT_STRIPE = 4;
+  SHADING_REVERSE_DIAG_STRIPE = 5;
+  SHADING_DIAG_STRIPE = 6;
+  SHADING_HORZ_CROSS = 7;
+  SHADING_DIAG_CROSS = 8;
+  SHADING_THIN_HORZ_STRIPE = 9;
+  SHADING_THIN_VERT_STRIPE = 10;
+  SHADING_THIN_REVERSE_DIAG_STRIPE = 11;
+  SHADING_THIN_DIAG_STRIPE = 12;
+  SHADING_THIN_HORZ_CROSS = 13;
+  SHADING_THIN_DIAG_CROSS = 14;
+  SHADING_PCT_5 = 15;
+  SHADING_PCT_10 = 16;
+  SHADING_PCT_12 = 17;
+  SHADING_PCT_15 = 18;
+  SHADING_PCT_20 = 19;
+  SHADING_PCT_25 = 20;
+  SHADING_PCT_30 = 21;
+  SHADING_PCT_35 = 22;
+  SHADING_PCT_37 = 23;
+  SHADING_PCT_40 = 24;
+  SHADING_PCT_45 = 25;
+  SHADING_PCT_50 = 26;
+  SHADING_PCT_55 = 27;
+  SHADING_PCT_60 = 28;
+  SHADING_PCT_62 = 29;
+  SHADING_PCT_65 = 30;
+  SHADING_PCT_70 = 31;
+  SHADING_PCT_75 = 32;
+  SHADING_PCT_80 = 33;
+  SHADING_PCT_85 = 34;
+  SHADING_PCT_87 = 35;
+  SHADING_PCT_90 = 36;
+  SHADING_PCT_95 = 37;
+}
+
+// w:on / w:off pattern — many boolean attributes toggle between explicit true/false
+// and "inherit from style". We use a tri-state to distinguish.
+message OnOffElement {
+  oneof state {
+    bool on = 1;   // Explicit true (attribute present, val="1" or val="true")
+    bool off = 2;  // Explicit false (attribute present, val="0" or val="false")
+    // If neither is set, the attribute is absent (inherited)
+  }
+}
+
+enum BorderStyle {
+  BORDER_NIL = 0;
+  BORDER_NONE = 1;
+  BORDER_SINGLE = 2;
+  BORDER_THICK = 3;
+  BORDER_DOUBLE = 4;
+  BORDER_DOTTED = 5;
+  BORDER_DASHED = 6;
+  BORDER_DOT_DASH = 7;
+  BORDER_DOT_DOT_DASH = 8;
+  BORDER_TRIPLE = 9;
+  BORDER_THIN_THICK_SMALL_GAP = 10;
+  BORDER_THICK_THIN_SMALL_GAP = 11;
+  BORDER_THIN_THICK_THIN_SMALL_GAP = 12;
+  BORDER_THIN_THICK_MEDIUM_GAP = 13;
+  BORDER_THICK_THIN_MEDIUM_GAP = 14;
+  BORDER_THIN_THICK_THIN_MEDIUM_GAP = 15;
+  BORDER_THIN_THICK_LARGE_GAP = 16;
+  BORDER_THICK_THIN_LARGE_GAP = 17;
+  BORDER_THIN_THICK_THIN_LARGE_GAP = 18;
+  BORDER_WAVE = 19;
+  BORDER_DOUBLE_WAVE = 20;
+  BORDER_DASH_SMALL_GAP = 21;
+  BORDER_DASH_DOT_STROKED = 22;
+  BORDER_THREE_D_EMBOSS = 23;
+  BORDER_THREE_D_ENGRAVE = 24;
+  BORDER_OUTSET = 25;
+  BORDER_INSET = 26;
+  BORDER_APPLES = 27;
+  BORDER_ARCHED_SCALLOPS = 28;
+  BORDER_BABY_PACIFIER = 29;
+  BORDER_BABY_RATTLE = 30;
+  // ... Art borders continue up to ~163 named values in ECMA-376 §17.18.2
+  BORDER_ART_CUSTOM = 255;
+}
+
+enum ThemeColor {
+  THEME_COLOR_NONE = 0;
+  THEME_COLOR_DARK1 = 1;
+  THEME_COLOR_LIGHT1 = 2;
+  THEME_COLOR_DARK2 = 3;
+  THEME_COLOR_LIGHT2 = 4;
+  THEME_COLOR_ACCENT1 = 5;
+  THEME_COLOR_ACCENT2 = 6;
+  THEME_COLOR_ACCENT3 = 7;
+  THEME_COLOR_ACCENT4 = 8;
+  THEME_COLOR_ACCENT5 = 9;
+  THEME_COLOR_ACCENT6 = 10;
+  THEME_COLOR_HYPERLINK = 11;
+  THEME_COLOR_FOLLOWED_HYPERLINK = 12;
+  THEME_COLOR_BACKGROUND1 = 13;
+  THEME_COLOR_TEXT1 = 14;
+  THEME_COLOR_BACKGROUND2 = 15;
+  THEME_COLOR_TEXT2 = 16;
+}
+
+message RevisionSaveIds {
+  string rsid_r = 1;
+  string rsid_rpr = 2;
+  string rsid_del = 3;
+  string rsid_default = 4;
+  string rsid_add = 5;
+}
+
+message FrameProperties {
+  int32 drop_cap = 1;
+  FrameAnchorType h_anchor = 2;
+  FrameAnchorType v_anchor = 3;
+  int32 h = 4;    // DXA
+  int32 w = 5;
+  HeightRule h_rule = 6;
+  int32 wrap = 7;
+  int32 x = 8;
+  int32 y = 9;
+  FrameXRelativeFrom x_align = 10;
+  FrameYRelativeFrom y_align = 11;
+  int32 h_space = 12;  // DXA
+  int32 v_space = 13;
+  OnOffElement lines = 14;
+  OnOffElement anchor_lock = 15;
+}
+
+enum FrameAnchorType {
+  FRAME_ANCHOR_TEXT = 0;
+  FRAME_ANCHOR_MARGIN = 1;
+  FRAME_ANCHOR_PAGE = 2;
+}
+
+enum FrameXRelativeFrom {
+  FRAME_X_LEFT = 0;
+  FRAME_X_CENTER = 1;
+  FRAME_X_RIGHT = 2;
+  FRAME_X_INSIDE = 3;
+  FRAME_X_OUTSIDE = 4;
+}
+
+enum FrameYRelativeFrom {
+  FRAME_Y_INLINE = 0;
+  FRAME_Y_TOP = 1;
+  FRAME_Y_CENTER = 2;
+  FRAME_Y_BOTTOM = 3;
+  FRAME_Y_INSIDE = 4;
+  FRAME_Y_OUTSIDE = 5;
+}
+
+// w:customXml
+message CustomXmlElement {
+  string uri = 1;
+  string element = 2;
+  repeated CustomXmlAttribute attributes = 3;
+  repeated BlockLevelElement block_content = 4;
+  repeated ParagraphChild run_content = 5;
+}
+
+message CustomXmlAttribute {
+  string uri = 1;
+  string name = 2;
+  string val = 3;
+}
+
+// w:subDoc — sub-document reference
+message Subheading {
+  string relationship_id = 1;
+}
+
+// w:altChunk — alternative format import chunk (RTF, HTML, etc.)
+message AltChunk {
+  string relationship_id = 1;
+  AltChunkProperties alt_chunk_pr = 2;
+}
+
+message AltChunkProperties {
+  MatchSrcFormatting match_src = 1;
+}
+
+enum MatchSrcFormatting {
+  MATCH_SRC_TRUE = 0;
+  MATCH_SRC_FALSE = 1;
+}
+
+// w:bdo — bidirectional override
+message BidirectionalOverride {
+  DirectionValue val = 1;
+  repeated ParagraphChild content = 2;
+}
+
+// w:dir — bidirectional embedding
+message BidirectionalEmbedding {
+  DirectionValue val = 1;
+  repeated ParagraphChild content = 2;
+}
+
+enum DirectionValue {
+  DIRECTION_LTR = 0;
+  DIRECTION_RTL = 1;
+}
+
+// w:smartTag (run-level)
+message RunLevelSmartTag {
+  string uri = 1;
+  string element = 2;
+  repeated CustomXmlAttribute attributes = 3;
+  repeated ParagraphChild content = 4;
+}
+
+
+// ============================================================================
+// WEB SETTINGS (word/webSettings.xml)
+// ============================================================================
+
+message WebSettings {
+  FrameLayout frame_layout = 1;
+  repeated FrameSet frame_sets = 2;
+  OnOffElement optimized_for_browser = 3;
+  OnOffElement rely_on_vml = 4;
+  OnOffElement allow_png = 5;
+  OnOffElement do_not_rely_on_css = 6;
+  OnOffElement do_not_save_as_single_file = 7;
+  OnOffElement do_not_organize_in_folder = 8;
+  OnOffElement do_not_fetch_image = 9;
+  string bullet_font = 10;
+  string target_screen_sz = 11;
+  OnOffElement save_smart_tags_as_xml = 12;
+  repeated DivId divs = 13;
+  string encoding = 14;
+}
+
+enum FrameLayout {
+  FRAME_LAYOUT_NONE = 0;
+  FRAME_LAYOUT_LEFT_RIGHT = 1;
+  FRAME_LAYOUT_TOP_BOTTOM = 2;
+}
+
+message FrameSet {
+  string relationship_id = 1;
+  string sz = 2;
+  bool sz_allowed = 3;
+  bool no_resize = 4;
+  FrameScrollbar scroll_bar = 5;
+  FrameLayout layout = 6;
+  repeated FrameSet child_frame_sets = 7;
+  string source_file_name = 8;
+  FrameMargin margin = 9;
+}
+
+enum FrameScrollbar {
+  FRAME_SCROLLBAR_ON = 0;
+  FRAME_SCROLLBAR_OFF = 1;
+  FRAME_SCROLLBAR_AUTO = 2;
+}
+
+message FrameMargin {
+  int32 w = 1;   // Pixels
+  int32 h = 2;
+}
+
+message DivId {
+  int32 id = 1;
+  bool block_quotes_start = 2;
+  bool block_quotes_end = 3;
+  OnOffElement body_div = 4;
+  DivBorder div_border = 5;
+  int32 margin_top = 6;
+  int32 margin_left = 7;
+  int32 margin_bottom = 8;
+  int32 margin_right = 9;
+}
+
+message DivBorder {
+  ParagraphBorder top = 1;
+  ParagraphBorder left = 2;
+  ParagraphBorder bottom = 3;
+  ParagraphBorder right = 4;
+}
+
+
+// ============================================================================
+// GLOSSARY DOCUMENT (word/glossary/document.xml)
+// ============================================================================
+
+message GlossaryDocument {
+  DocDefaults doc_defaults = 1;
+  repeated BuildingBlock building_blocks = 2;
+}
+
+message BuildingBlock {
+  BuildingBlockProperties properties = 1;
+  Body body = 2;
+}
+
+message BuildingBlockProperties {
+  string name = 1;
+  string style_name = 2;
+  string description = 3;
+  string guid = 4;
+  BuildingBlockCategory category = 5;
+  BuildingBlockTypes types = 6;
+  BuildingBlockBehavior behavior = 7;
+  string gallery = 8;
+  BuildingBlockInsertionPoint insertion_point = 9;
+}
+
+message BuildingBlockCategory {
+  string name = 1;
+}
+
+message BuildingBlockTypes {
+  repeated BuildingBlockType types = 1;
+}
+
+enum BuildingBlockType {
+  BB_TYPE_NONE = 0;
+  BB_TYPE_NORMAL = 1;
+  BB_TYPE_AUTO_TEXT = 2;
+  BB_TYPE_TOOL_BAR = 3;
+  BB_TYPE_DOCUMENT_PART = 4;
+  BB_TYPE_GALLERY = 5;
+}
+
+message BuildingBlockBehavior {
+  BuildingBlockBehaviorValue val = 1;
+}
+
+enum BuildingBlockBehaviorValue {
+  BB_BEHAVIOR_CONTENT = 0;
+  BB_BEHAVIOR_P = 1;
+  BB_BEHAVIOR_PG = 2;
+}
+
+enum BuildingBlockInsertionPoint {
+  BB_INSERT_CONTENT = 0;
+  BB_INSERT_P = 1;
+  BB_INSERT_PG = 2;
+}
+
+// ============================================================================
+// EXTENDED DOCUMENT WRAPPER
+// ============================================================================
+
+// DocxDocumentWithMetadata is the primary transport type for DOCX documents
+// in the OpenFormat service.  raw_bytes carries the verbatim source ZIP bytes
+// for round-trip Encode calls, mirroring PdfDocument.raw_bytes and
+// XmlDocumentWithMetadata.raw_bytes.
+message DocxDocumentWithMetadata {
+  // The fully-parsed DOCX package structure.
+  Package docx_package = 1;
+
+  // Total paragraph count across the document body.
+  int32 paragraph_count = 2;
+
+  // Total image/media part count in the package.
+  int32 image_count = 3;
+
+  // Total font references from word/fontTable.xml.
+  int32 font_count = 4;
+
+  // True if the document has tracked changes (insertions or deletions).
+  bool has_tracked_changes = 5;
+
+  // True if the document has comments.
+  bool has_comments = 6;
+
+  // True if the document has footnotes or endnotes.
+  bool has_notes = 7;
+
+  // Raw ZIP source bytes — always set by Decode; required by Encode for round-trip.
+  bytes raw_bytes = 100;
+}
