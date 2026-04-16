@@ -156,6 +156,35 @@ func TestValidate(t *testing.T) {
 				}
 			}
 
+			// Hyperlinks/bookmarks fixture must surface at least one
+			// hyperlink and one bookmarkStart/end pair in the typed body.
+			if strings.Contains(rel, "13_hyperlinks_bookmarks") {
+				var hyperlinks, bmStart, bmEnd int
+				for _, e := range body.Content {
+					p := e.GetParagraph()
+					if p == nil {
+						continue
+					}
+					for _, c := range p.Content {
+						if c.GetHyperlink() != nil {
+							hyperlinks++
+						}
+						if c.GetBookmarkStart() != nil {
+							bmStart++
+						}
+						if c.GetBookmarkEnd() != nil {
+							bmEnd++
+						}
+					}
+				}
+				if hyperlinks < 2 {
+					t.Errorf("expected ≥2 hyperlinks, got %d", hyperlinks)
+				}
+				if bmStart < 2 || bmEnd < 2 {
+					t.Errorf("expected ≥2 bookmarkStart/End pairs, got start=%d end=%d", bmStart, bmEnd)
+				}
+			}
+
 			// Fixtures whose filenames imply headers/footers must
 			// surface at least one section with matching references.
 			if strings.Contains(rel, "10_headers_footers") || strings.Contains(rel, "11_kitchen_sink") {

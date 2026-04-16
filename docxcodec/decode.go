@@ -190,35 +190,75 @@ func parseBlockContainer(dec *xml.Decoder, parent xml.StartElement, doc *pb.Docx
 }
 
 // parseParagraph reads a <w:p> subtree and returns the populated
-// Paragraph. The paragraph's direct children are runs and tracked-
-// change wrappers; anything else (pPr, bookmarks, hyperlinks) is
-// skipped.
+// Paragraph. The paragraph's direct children are runs, tracked-change
+// wrappers, hyperlinks, and bookmark start/end markers.
 func parseParagraph(dec *xml.Decoder, start xml.StartElement, doc *pb.DocxDocumentWithMetadata) *pb.Paragraph {
 	doc.ParagraphCount++
-	p := &pb.Paragraph{}
+	p := &pb.Paragraph{Content: parseParagraphChildren(dec, start, doc)}
+	return p
+}
+
+// parseTrackedInsertion reads a <w:ins> subtree within a paragraph.
+func parseTrackedInsertion(dec *xml.Decoder, start xml.StartElement, doc *pb.DocxDocumentWithMetadata) *pb.TrackedChangeInsertion {
+	return &pb.TrackedChangeInsertion{
+		Info:    parseTrackedInfo(start),
+		Content: parseParagraphChildren(dec, start, doc),
+	}
+}
+
+// parseTrackedDeletion reads a <w:del> subtree within a paragraph.
+func parseTrackedDeletion(dec *xml.Decoder, start xml.StartElement, doc *pb.DocxDocumentWithMetadata) *pb.TrackedChangeDeletion {
+	return &pb.TrackedChangeDeletion{
+		Info:    parseTrackedInfo(start),
+		Content: parseParagraphChildren(dec, start, doc),
+	}
+}
+
+// parseParagraphChildren reads tokens until the end-tag matching
+// `start` and appends ParagraphChild entries for each modelled variant
+// (Run, Hyperlink, BookmarkStart, BookmarkEnd, Ins, Del). Shared by
+// <w:p>, <w:ins>, <w:del>, and <w:hyperlink>, which all hold the same
+// ParagraphChild list type.
+func parseParagraphChildren(dec *xml.Decoder, start xml.StartElement, doc *pb.DocxDocumentWithMetadata) []*pb.ParagraphChild {
+	var out []*pb.ParagraphChild
 	for {
 		tok, err := dec.Token()
 		if err != nil {
-			return p
+			return out
 		}
 		switch t := tok.(type) {
 		case xml.StartElement:
 			switch t.Name.Local {
 			case "r":
 				r := parseRun(dec, t)
-				p.Content = append(p.Content, &pb.ParagraphChild{
+				out = append(out, &pb.ParagraphChild{
 					Child: &pb.ParagraphChild_Run{Run: r},
 				})
+			case "hyperlink":
+				h := parseHyperlink(dec, t, doc)
+				out = append(out, &pb.ParagraphChild{
+					Child: &pb.ParagraphChild_Hyperlink{Hyperlink: h},
+				})
+			case "bookmarkStart":
+				out = append(out, &pb.ParagraphChild{
+					Child: &pb.ParagraphChild_BookmarkStart{BookmarkStart: parseBookmarkStart(t)},
+				})
+				skipElement(dec, t)
+			case "bookmarkEnd":
+				out = append(out, &pb.ParagraphChild{
+					Child: &pb.ParagraphChild_BookmarkEnd{BookmarkEnd: parseBookmarkEnd(t)},
+				})
+				skipElement(dec, t)
 			case "ins":
 				doc.HasTrackedChanges = true
-				ins := parseTrackedInsertion(dec, t)
-				p.Content = append(p.Content, &pb.ParagraphChild{
+				ins := parseTrackedInsertion(dec, t, doc)
+				out = append(out, &pb.ParagraphChild{
 					Child: &pb.ParagraphChild_Ins{Ins: ins},
 				})
 			case "del":
 				doc.HasTrackedChanges = true
-				del := parseTrackedDeletion(dec, t)
-				p.Content = append(p.Content, &pb.ParagraphChild{
+				del := parseTrackedDeletion(dec, t, doc)
+				out = append(out, &pb.ParagraphChild{
 					Child: &pb.ParagraphChild_Del{Del: del},
 				})
 			default:
@@ -226,63 +266,77 @@ func parseParagraph(dec *xml.Decoder, start xml.StartElement, doc *pb.DocxDocume
 			}
 		case xml.EndElement:
 			if t.Name.Local == start.Name.Local {
-				return p
+				return out
 			}
 		}
 	}
 }
 
-// parseTrackedInsertion reads a <w:ins> subtree within a paragraph,
-// collecting runs as ParagraphChild entries on the wrapper.
-func parseTrackedInsertion(dec *xml.Decoder, start xml.StartElement) *pb.TrackedChangeInsertion {
-	ins := &pb.TrackedChangeInsertion{Info: parseTrackedInfo(start)}
-	for {
-		tok, err := dec.Token()
-		if err != nil {
-			return ins
-		}
-		switch t := tok.(type) {
-		case xml.StartElement:
-			if t.Name.Local == "r" {
-				r := parseRun(dec, t)
-				ins.Content = append(ins.Content, &pb.ParagraphChild{
-					Child: &pb.ParagraphChild_Run{Run: r},
-				})
-			} else {
-				skipElement(dec, t)
+// parseHyperlink reads a <w:hyperlink> subtree. Attributes are lifted
+// onto Hyperlink; body content recurses through parseParagraphChildren
+// so nested runs, ins/del wrappers, and bookmark markers populate.
+func parseHyperlink(dec *xml.Decoder, start xml.StartElement, doc *pb.DocxDocumentWithMetadata) *pb.Hyperlink {
+	h := &pb.Hyperlink{
+		History: true, // OOXML default when w:history is absent
+	}
+	for _, a := range start.Attr {
+		switch a.Name.Local {
+		case "id":
+			if a.Name.Space == "http://schemas.openxmlformats.org/officeDocument/2006/relationships" ||
+				a.Name.Space == "" {
+				h.RelationshipId = a.Value
 			}
-		case xml.EndElement:
-			if t.Name.Local == start.Name.Local {
-				return ins
-			}
+		case "anchor":
+			h.Anchor = a.Value
+		case "docLocation":
+			h.DocLocation = a.Value
+		case "history":
+			h.History = a.Value != "0" && a.Value != "false"
+		case "tooltip":
+			h.Tooltip = a.Value
 		}
 	}
+	h.Content = parseParagraphChildren(dec, start, doc)
+	return h
 }
 
-// parseTrackedDeletion reads a <w:del> subtree within a paragraph.
-func parseTrackedDeletion(dec *xml.Decoder, start xml.StartElement) *pb.TrackedChangeDeletion {
-	del := &pb.TrackedChangeDeletion{Info: parseTrackedInfo(start)}
-	for {
-		tok, err := dec.Token()
-		if err != nil {
-			return del
-		}
-		switch t := tok.(type) {
-		case xml.StartElement:
-			if t.Name.Local == "r" {
-				r := parseRun(dec, t)
-				del.Content = append(del.Content, &pb.ParagraphChild{
-					Child: &pb.ParagraphChild_Run{Run: r},
-				})
-			} else {
-				skipElement(dec, t)
+// parseBookmarkStart lifts the w:id / w:name / w:colFirst / w:colLast
+// attributes off <w:bookmarkStart>. The element is self-closing, so the
+// caller is expected to consume the matching end tag via skipElement.
+func parseBookmarkStart(start xml.StartElement) *pb.BookmarkStart {
+	b := &pb.BookmarkStart{}
+	for _, a := range start.Attr {
+		switch a.Name.Local {
+		case "id":
+			if n, err := parseInt32(a.Value); err == nil {
+				b.Id = n
 			}
-		case xml.EndElement:
-			if t.Name.Local == start.Name.Local {
-				return del
+		case "name":
+			b.Name = a.Value
+		case "colFirst":
+			if n, err := parseInt32(a.Value); err == nil {
+				b.ColFirst = n
+			}
+		case "colLast":
+			if n, err := parseInt32(a.Value); err == nil {
+				b.ColLast = n
 			}
 		}
 	}
+	return b
+}
+
+// parseBookmarkEnd lifts the w:id attribute off <w:bookmarkEnd>.
+func parseBookmarkEnd(start xml.StartElement) *pb.BookmarkEnd {
+	b := &pb.BookmarkEnd{}
+	for _, a := range start.Attr {
+		if a.Name.Local == "id" {
+			if n, err := parseInt32(a.Value); err == nil {
+				b.Id = n
+			}
+		}
+	}
+	return b
 }
 
 // parseRun reads a <w:r> subtree and returns the populated Run,

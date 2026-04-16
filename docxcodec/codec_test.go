@@ -697,6 +697,105 @@ func TestDecodeBodyTypedTreeTable(t *testing.T) {
 	}
 }
 
+// TestDecodeBodyTypedTreeHyperlink covers the <w:hyperlink> branch of
+// parseParagraphChildren. An external-link hyperlink (r:id + tooltip +
+// history) and an internal anchor hyperlink both appear on
+// ParagraphChild_Hyperlink, with nested runs recursing through the
+// same ParagraphChild list.
+func TestDecodeBodyTypedTreeHyperlink(t *testing.T) {
+	var buf bytes.Buffer
+	w := zip.NewWriter(&buf)
+	f, _ := w.Create("word/document.xml")
+	_, _ = f.Write([]byte(
+		`<?xml version="1.0"?>` +
+			`<w:document xmlns:w="http://w" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">` +
+			`<w:body>` +
+			`<w:p><w:hyperlink r:id="rIdLink1" w:tooltip="homepage" w:history="1">` +
+			`<w:r><w:t>anchor text</w:t></w:r></w:hyperlink></w:p>` +
+			`<w:p><w:hyperlink w:anchor="intro" w:history="0">` +
+			`<w:r><w:t>jump</w:t></w:r></w:hyperlink></w:p>` +
+			`</w:body></w:document>`))
+	_ = w.Close()
+
+	doc, err := Decode(buf.Bytes())
+	if err != nil {
+		t.Fatalf("Decode: %v", err)
+	}
+	body := doc.DocxPackage.Document.Body
+	if len(body.Content) != 2 {
+		t.Fatalf("body.Content len = %d, want 2", len(body.Content))
+	}
+
+	ext := body.Content[0].GetParagraph().Content[0].GetHyperlink()
+	if ext == nil {
+		t.Fatal("expected ParagraphChild_Hyperlink")
+	}
+	if ext.RelationshipId != "rIdLink1" {
+		t.Errorf("RelationshipId = %q, want rIdLink1", ext.RelationshipId)
+	}
+	if ext.Tooltip != "homepage" {
+		t.Errorf("Tooltip = %q, want homepage", ext.Tooltip)
+	}
+	if !ext.History {
+		t.Error("History = false, want true")
+	}
+	if got := ext.Content[0].GetRun().Content[0].GetText().Value; got != "anchor text" {
+		t.Errorf("hyperlink text = %q, want %q", got, "anchor text")
+	}
+
+	anchor := body.Content[1].GetParagraph().Content[0].GetHyperlink()
+	if anchor == nil {
+		t.Fatal("expected anchor ParagraphChild_Hyperlink")
+	}
+	if anchor.Anchor != "intro" {
+		t.Errorf("Anchor = %q, want intro", anchor.Anchor)
+	}
+	if anchor.History {
+		t.Error(`History = true on w:history="0", want false`)
+	}
+}
+
+// TestDecodeBodyTypedTreeBookmarks covers the <w:bookmarkStart> and
+// <w:bookmarkEnd> branches. Attributes (id, name, colFirst/colLast)
+// must flow onto the corresponding proto fields.
+func TestDecodeBodyTypedTreeBookmarks(t *testing.T) {
+	var buf bytes.Buffer
+	w := zip.NewWriter(&buf)
+	f, _ := w.Create("word/document.xml")
+	_, _ = f.Write([]byte(
+		`<?xml version="1.0"?><w:document xmlns:w="http://w"><w:body>` +
+			`<w:p>` +
+			`<w:bookmarkStart w:id="7" w:name="intro" w:colFirst="1" w:colLast="3"/>` +
+			`<w:r><w:t>body</w:t></w:r>` +
+			`<w:bookmarkEnd w:id="7"/>` +
+			`</w:p>` +
+			`</w:body></w:document>`))
+	_ = w.Close()
+
+	doc, err := Decode(buf.Bytes())
+	if err != nil {
+		t.Fatalf("Decode: %v", err)
+	}
+	children := doc.DocxPackage.Document.Body.Content[0].GetParagraph().Content
+	if len(children) != 3 {
+		t.Fatalf("paragraph children = %d, want 3 (bookmarkStart, run, bookmarkEnd)", len(children))
+	}
+	start := children[0].GetBookmarkStart()
+	if start == nil {
+		t.Fatal("children[0] is not a BookmarkStart")
+	}
+	if start.Id != 7 || start.Name != "intro" || start.ColFirst != 1 || start.ColLast != 3 {
+		t.Errorf("BookmarkStart = %+v", start)
+	}
+	end := children[2].GetBookmarkEnd()
+	if end == nil {
+		t.Fatal("children[2] is not a BookmarkEnd")
+	}
+	if end.Id != 7 {
+		t.Errorf("BookmarkEnd.Id = %d, want 7", end.Id)
+	}
+}
+
 func TestDecodeTrackedChanges(t *testing.T) {
 	var buf bytes.Buffer
 	w := zip.NewWriter(&buf)

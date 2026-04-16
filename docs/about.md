@@ -181,6 +181,14 @@ tree: `TableProperties.style_id`, `TableProperties.width`,
 `.Properties.GridSpan` flow onto real proto fields that consumers can
 query without re-parsing the OOXML.
 
+The typed-body population also now covers `<w:hyperlink>` (lifting
+`r:id`, `w:anchor`, `w:docLocation`, `w:history`, `w:tooltip`, and
+recursing through nested runs) and `<w:bookmarkStart>` /
+`<w:bookmarkEnd>` markers (lifting `w:id`, `w:name`, `w:colFirst`,
+`w:colLast`). See `data/generated/13_hyperlinks_bookmarks.docx` and
+`TestDecodeBodyTypedTreeHyperlink` / `TestDecodeBodyTypedTreeBookmarks`
+for the round-trip assertions.
+
 ## Where to go next
 
 - `docxcodec/` — the codec itself (`Decode`, `Encode`, `IsDocx`).

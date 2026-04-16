@@ -13,25 +13,48 @@ import (
 // Spec describes the contents of a synthetic DOCX package. All fields
 // are optional; unset fields produce the minimum valid package.
 type Spec struct {
-	Paragraphs    []string // one <w:p> per string
-	TrackedInsert string   // wrapped in <w:ins>, appended after Paragraphs
-	TrackedDelete string   // wrapped in <w:del>
-	Comments      []string // non-empty ⇒ comments.xml with <w:comment>s
-	Footnotes     []string // non-empty ⇒ footnotes.xml with <w:footnote>s
-	Endnotes      []string // non-empty ⇒ endnotes.xml with <w:endnote>s
-	Headers       int      // number of header parts to emit
-	Footers       int      // number of footer parts to emit
-	Fonts         []string // non-empty ⇒ fontTable.xml with <w:font w:name="...">
-	Images        []Image  // media parts under word/media/
-	Sections      int      // extra w:sectPr breaks inside the body
-	IncludeStyles bool     // emit an empty word/styles.xml stub
-	Tables        []Table  // each appended to the body after paragraphs
+	Paragraphs    []string    // one <w:p> per string
+	TrackedInsert string      // wrapped in <w:ins>, appended after Paragraphs
+	TrackedDelete string      // wrapped in <w:del>
+	Comments      []string    // non-empty ⇒ comments.xml with <w:comment>s
+	Footnotes     []string    // non-empty ⇒ footnotes.xml with <w:footnote>s
+	Endnotes      []string    // non-empty ⇒ endnotes.xml with <w:endnote>s
+	Headers       int         // number of header parts to emit
+	Footers       int         // number of footer parts to emit
+	Fonts         []string    // non-empty ⇒ fontTable.xml with <w:font w:name="...">
+	Images        []Image     // media parts under word/media/
+	Sections      int         // extra w:sectPr breaks inside the body
+	IncludeStyles bool        // emit an empty word/styles.xml stub
+	Tables        []Table     // each appended to the body after paragraphs
+	Hyperlinks    []Hyperlink // each wrapped in its own <w:p>
+	Bookmarks     []Bookmark  // each wrapped in its own <w:p>
 }
 
 // Image is a single media part embedded under word/media/.
 type Image struct {
 	Name string // filename under word/media/ (e.g. "image1.png")
 	Data []byte // raw bytes
+}
+
+// Hyperlink is a <w:hyperlink> wrapper around a single run with the
+// given Text. Either RelationshipID (for external links via r:id) or
+// Anchor (for intra-document links) is typically set; both may be set.
+// History defaults to true when a hyperlink is "visited"-tracked.
+type Hyperlink struct {
+	RelationshipID string // r:id attribute (optional)
+	Anchor         string // w:anchor (optional)
+	DocLocation    string // w:docLocation (optional)
+	Tooltip        string // w:tooltip (optional)
+	Text           string // run text inside the hyperlink
+	History        bool   // w:history; emitted as "1" when true
+}
+
+// Bookmark renders a paragraph bracketed by <w:bookmarkStart>/
+// <w:bookmarkEnd> markers wrapping one run with the given Text.
+type Bookmark struct {
+	ID   int32  // w:id on both start and end
+	Name string // w:name on start
+	Text string // run text inside the bookmark pair
 }
 
 // Table is a rectangular table spec consumed by buildTable. Each cell
@@ -202,6 +225,12 @@ func buildDocument(s Spec) string {
 	for _, tbl := range s.Tables {
 		sb.WriteString(buildTable(tbl))
 	}
+	for _, h := range s.Hyperlinks {
+		sb.WriteString(buildHyperlinkParagraph(h))
+	}
+	for _, b := range s.Bookmarks {
+		sb.WriteString(buildBookmarkParagraph(b))
+	}
 	sb.WriteString(buildSectPr(s))
 	sb.WriteString(`</w:body></w:document>`)
 	return sb.String()
@@ -235,6 +264,37 @@ func buildSectPr(s Spec) string {
 
 func paragraph(text string) string {
 	return `<w:p><w:r><w:t>` + escape(text) + `</w:t></w:r></w:p>`
+}
+
+// buildHyperlinkParagraph wraps a single run in <w:hyperlink>, emitting
+// only the attributes set on h. The result is a complete <w:p>.
+func buildHyperlinkParagraph(h Hyperlink) string {
+	var attrs strings.Builder
+	if h.RelationshipID != "" {
+		attrs.WriteString(` r:id="` + escape(h.RelationshipID) + `"`)
+	}
+	if h.Anchor != "" {
+		attrs.WriteString(` w:anchor="` + escape(h.Anchor) + `"`)
+	}
+	if h.DocLocation != "" {
+		attrs.WriteString(` w:docLocation="` + escape(h.DocLocation) + `"`)
+	}
+	if h.Tooltip != "" {
+		attrs.WriteString(` w:tooltip="` + escape(h.Tooltip) + `"`)
+	}
+	if h.History {
+		attrs.WriteString(` w:history="1"`)
+	}
+	return `<w:p><w:hyperlink` + attrs.String() + `><w:r><w:t>` + escape(h.Text) + `</w:t></w:r></w:hyperlink></w:p>`
+}
+
+// buildBookmarkParagraph renders a paragraph with <w:bookmarkStart>,
+// one run, and <w:bookmarkEnd> carrying the same w:id.
+func buildBookmarkParagraph(b Bookmark) string {
+	return fmt.Sprintf(
+		`<w:p><w:bookmarkStart w:id="%d" w:name="%s"/><w:r><w:t>%s</w:t></w:r><w:bookmarkEnd w:id="%d"/></w:p>`,
+		b.ID, escape(b.Name), escape(b.Text), b.ID,
+	)
 }
 
 // buildTable emits a <w:tbl> for the given Table spec. If t.GridCols is

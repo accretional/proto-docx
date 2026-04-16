@@ -143,6 +143,28 @@ func fixtures() []fixture {
 			},
 		},
 		{
+			name: "13_hyperlinks_bookmarks.docx",
+			spec: docxbuild.Spec{
+				Paragraphs: []string{"Links and bookmarks below"},
+				Hyperlinks: []docxbuild.Hyperlink{
+					{
+						RelationshipID: "rIdLink1",
+						Tooltip:        "Anthropic homepage",
+						Text:           "Anthropic",
+						History:        true,
+					},
+					{
+						Anchor: "intro",
+						Text:   "jump to intro",
+					},
+				},
+				Bookmarks: []docxbuild.Bookmark{
+					{ID: 1, Name: "intro", Text: "Introduction"},
+					{ID: 2, Name: "_Toc_section_2", Text: "Section 2"},
+				},
+			},
+		},
+		{
 			name: "11_kitchen_sink.docx",
 			spec: docxbuild.Spec{
 				Paragraphs: []string{

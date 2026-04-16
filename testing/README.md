@@ -51,6 +51,7 @@ All fixtures under `data/generated/` are built by
 | `10_headers_footers.docx` | `header1.xml` / `footer1.xml` etc. |
 | `11_kitchen_sink.docx` | Combines every feature above. |
 | `12_tables.docx` | Two `<w:tbl>` tables — one with `<w:tblStyle>` and an explicit `<w:tblGrid>`, one with inferred grid. |
+| `13_hyperlinks_bookmarks.docx` | External `<w:hyperlink r:id>` with tooltip + `w:history`, internal `<w:hyperlink w:anchor>`, two `<w:bookmarkStart>`/`<w:bookmarkEnd>` pairs. |
 
 Real-world DOCX files live at the top level of `data/`
 (e.g. `data/DOCX_TestPage.docx`, `data/sample-word-document.docx`) and
