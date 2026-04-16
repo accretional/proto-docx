@@ -1,13 +1,16 @@
 // Command demo-screenshots generates the PNG assets referenced from
 // docs/about.md. When a chromerpc gRPC server is reachable at
 // CHROMERPC_ADDR (default localhost:50051), it drives real screenshots
-// of the demo HTML pages. Otherwise it writes placeholder PNGs so the
-// documentation doesn't show broken images in the GitHub UI.
+// of the demo HTML pages via HeadlessBrowserService.RunAutomation.
+// Otherwise it writes placeholder PNGs so the documentation doesn't
+// show broken images in the GitHub UI.
 //
-// Mirrors proto-xml/cmd/demo-screenshots so the pattern is familiar.
+// LET_IT_RIP.sh auto-starts a chromerpc server if one isn't already
+// running, so local runs produce real captures by default.
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"flag"
 	"fmt"
@@ -21,9 +24,12 @@ import (
 	"sort"
 	"time"
 
+	hbpb "github.com/accretional/chromerpc/proto/cdp/headlessbrowser"
 	"golang.org/x/image/font"
 	"golang.org/x/image/font/basicfont"
 	"golang.org/x/image/math/fixed"
+	"google.golang.org/grpc"
+	"google.golang.org/grpc/credentials/insecure"
 
 	"openformat-docx/docxcodec"
 	pb "openformat-docx/gen/go/openformat/v1"
@@ -79,10 +85,9 @@ func main() {
 		{html: typedBody, png: filepath.Join(*outDir, "docx-typed-body.png"), caption: "Typed Body.Content tree (Paragraph/Run/Text/Ins/Del)"},
 	}
 
-	if chromeRPCReachable(addr) {
-		fmt.Printf("chromerpc reachable at %s — real screenshots unsupported in this build\n", addr)
-		fmt.Println("  (this repo intentionally does not vendor the chromerpc gRPC stubs)")
-		fmt.Println("  falling through to placeholder generation")
+	useRealCaptures := chromeRPCReachable(addr)
+	if useRealCaptures {
+		fmt.Printf("chromerpc reachable at %s — capturing real screenshots\n", addr)
 	} else {
 		fmt.Printf("chromerpc not reachable at %s — writing placeholder PNGs\n", addr)
 	}
@@ -94,11 +99,76 @@ func main() {
 				continue
 			}
 		}
-		if err := writePlaceholder(t.png, t.caption, t.html); err != nil {
+		if useRealCaptures {
+			if err := capture(addr, t.html, t.png); err != nil {
+				fmt.Fprintf(os.Stderr, "capture %s failed (%v) — falling back to placeholder\n", t.png, err)
+				if err2 := writePlaceholder(t.png, t.caption, t.html); err2 != nil {
+					die("placeholder fallback %s: %v", t.png, err2)
+				}
+			} else {
+				fmt.Printf("captured %s\n", t.png)
+				continue
+			}
+		} else if err := writePlaceholder(t.png, t.caption, t.html); err != nil {
 			die("placeholder %s: %v", t.png, err)
 		}
 		fmt.Printf("wrote %s\n", t.png)
 	}
+}
+
+// capture drives chromerpc via HeadlessBrowserService.RunAutomation:
+// set viewport → navigate file:// URL → wait briefly for fonts →
+// capture screenshot to a file the server can reach. We then read the
+// PNG bytes off StepResult.screenshot_data so client and server don't
+// need to agree on a filesystem path.
+func capture(addr, htmlPath, outPNG string) error {
+	absHTML, err := filepath.Abs(htmlPath)
+	if err != nil {
+		return fmt.Errorf("abs %s: %w", htmlPath, err)
+	}
+	url := "file://" + absHTML
+
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	conn, err := grpc.NewClient(addr, grpc.WithTransportCredentials(insecure.NewCredentials()))
+	if err != nil {
+		return fmt.Errorf("dial %s: %w", addr, err)
+	}
+	defer conn.Close()
+	client := hbpb.NewHeadlessBrowserServiceClient(conn)
+
+	seq := &hbpb.AutomationSequence{
+		Name: "proto-docx-demo",
+		Steps: []*hbpb.AutomationStep{
+			{Label: "viewport", Action: &hbpb.AutomationStep_SetViewport{
+				SetViewport: &hbpb.SetViewport{Width: 1280, Height: 800, DeviceScaleFactor: 2},
+			}},
+			{Label: "navigate", Action: &hbpb.AutomationStep_Navigate{
+				Navigate: &hbpb.Navigate{Url: url},
+			}},
+			{Label: "settle", Action: &hbpb.AutomationStep_Wait{
+				Wait: &hbpb.Wait{Milliseconds: 250},
+			}},
+			{Label: "screenshot", Action: &hbpb.AutomationStep_Screenshot{
+				Screenshot: &hbpb.Screenshot{Format: "png"},
+			}},
+		},
+	}
+
+	res, err := client.RunAutomation(ctx, seq)
+	if err != nil {
+		return fmt.Errorf("run automation: %w", err)
+	}
+	if !res.Success {
+		return fmt.Errorf("automation failed: %s", res.Error)
+	}
+	for _, sr := range res.StepResults {
+		if sr.Label == "screenshot" && len(sr.ScreenshotData) > 0 {
+			return os.WriteFile(outPNG, sr.ScreenshotData, 0o644)
+		}
+	}
+	return fmt.Errorf("no screenshot_data returned")
 }
 
 type target struct {

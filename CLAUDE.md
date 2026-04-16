@@ -12,7 +12,9 @@ Claude Code sessions.
   validation — use the scripts.
 - Before committing or pushing: `./LET_IT_RIP.sh` must pass, AND the
   screenshots it regenerated under `screenshots/` must be visually
-  validated for regressions.
+  validated for regressions. LET_IT_RIP auto-starts a chromerpc
+  server from `../chromerpc/bin/chromerpc` if nothing is listening on
+  :50051, so real captures are the default.
 - When you add a user-visible feature, add a `renderXxx` target to
   `cmd/demo-screenshots/main.go` so it shows up in `screenshots/`, then
   re-run `./LET_IT_RIP.sh` and embed the new PNG in `README.md` and
@@ -40,6 +42,16 @@ Claude Code sessions.
 - Wired into Go via `replace openformat => ../proto-xml` in `go.mod`.
 - Used for: `openformat/xmlcodec` (when introspecting individual XML
   parts) and `openformat/gen/go/openformat/v1` (for `MimeType`).
+
+## chromerpc dependency (demo-screenshots only)
+
+- Expected at `../chromerpc`. `LET_IT_RIP.sh` builds
+  `../chromerpc/bin/chromerpc` on demand and launches a headless
+  server if nothing is listening on :50051, then stops it on exit.
+- Wired into Go via `replace github.com/accretional/chromerpc =>
+  ../chromerpc` in `go.mod`.
+- Used only by `cmd/demo-screenshots` (via `HeadlessBrowserService`
+  gRPC). The codec itself has no chromerpc dependency.
 
 ## Code layout
 
