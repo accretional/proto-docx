@@ -8,6 +8,11 @@ require (
 	openformat v0.0.0-00010101000000-000000000000
 )
 
+require (
+	golang.org/x/net v0.53.0 // indirect
+	golang.org/x/text v0.36.0 // indirect
+)
+
 // proto-docx depends on proto-xml for (a) the xmlcodec package that
 // parses individual DOCX XML parts, and (b) the generated MimeType
 // proto from openformat/v1/mime.proto, which both modules share.

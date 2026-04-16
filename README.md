@@ -143,11 +143,14 @@ is not introspectable via typed fields:
   depend on types from `openformat.proto` and `pdf_document.proto`
   which aren't vendored here. Port is mechanical — vendor the extra
   protos and copy `mime-proto/pb/internal/extract/docx/`.
-- **Individual XML parts are parsed with stdlib `encoding/xml` only for
-  counts.** When a caller wants `word/document.xml` as a typed
-  `XmlDocumentWithMetadata`, they currently have to read it out of the
-  ZIP themselves and hand it to `proto-xml`'s `xmlcodec.Decode`. Wiring
-  that through the DOCX codec automatically is a natural follow-up.
+- **Typed XML parts beyond `word/document.xml` still require manual
+  unzipping.** `docxcodec.DecodeWith(raw, DecodeOptions{IncludeTypedParts: true})`
+  now hands `word/document.xml` to `proto-xml`'s `xmlcodec.Decode` and
+  exposes the result on `Decoded.Document`, but other OPC parts
+  (`styles.xml`, `numbering.xml`, `settings.xml`, comments, notes,
+  headers/footers) still arrive only as raw ZIP bytes. Extending the
+  typed-parts surface is mechanical — each added part is another
+  `xmlcodec.Decode` plus a field on `Decoded`.
 - **DOCX conformance class / version detection.** Strict vs.
   transitional OOXML isn't surfaced on `DocxDocumentWithMetadata`;
   callers have to inspect `Package.ContentTypes` themselves.

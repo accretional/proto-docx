@@ -90,6 +90,21 @@ func TestValidate(t *testing.T) {
 			if doc.DocxPackage.Document == nil || doc.DocxPackage.Document.Body == nil {
 				t.Error("Document/Body not populated")
 			}
+
+			// Exercise the typed-parts path too: word/document.xml
+			// handed to proto-xml's xmlcodec must parse cleanly for
+			// every fixture, and the resulting tree must have a
+			// document element.
+			d, err := docxcodec.DecodeWith(raw, docxcodec.DecodeOptions{IncludeTypedParts: true})
+			if err != nil {
+				t.Fatalf("DecodeWith(typed): %v", err)
+			}
+			if d.Document == nil {
+				t.Fatal("DecodeWith: Document nil")
+			}
+			if d.Document.Document == nil || d.Document.Document.DocumentElement == nil {
+				t.Error("typed XML has no root element")
+			}
 		})
 	}
 }

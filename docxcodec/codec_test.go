@@ -174,6 +174,61 @@ func TestDecodeMediaAndFonts(t *testing.T) {
 	}
 }
 
+func TestDecodeWithTypedPartsOff(t *testing.T) {
+	raw := minimalDocx(t)
+	d, err := DecodeWith(raw, DecodeOptions{})
+	if err != nil {
+		t.Fatalf("DecodeWith: %v", err)
+	}
+	if d.DocxDocumentWithMetadata == nil {
+		t.Fatal("embedded DocxDocumentWithMetadata nil")
+	}
+	if d.Document != nil {
+		t.Error("Document populated despite IncludeTypedParts=false")
+	}
+	if !bytes.Equal(d.RawBytes, raw) {
+		t.Error("RawBytes not preserved through DecodeWith")
+	}
+}
+
+func TestDecodeWithTypedPartsOn(t *testing.T) {
+	raw := minimalDocx(t)
+	d, err := DecodeWith(raw, DecodeOptions{IncludeTypedParts: true})
+	if err != nil {
+		t.Fatalf("DecodeWith: %v", err)
+	}
+	if d.Document == nil {
+		t.Fatal("Document nil with IncludeTypedParts=true")
+	}
+	if d.Document.Document == nil || d.Document.Document.DocumentElement == nil {
+		t.Fatal("typed XML has no root element")
+	}
+	if got, want := d.Document.Document.DocumentElement.LocalName, "document"; got != want {
+		t.Errorf("root element local name = %q, want %q", got, want)
+	}
+	if len(d.Document.RawBytes) == 0 {
+		t.Error("typed XmlDocumentWithMetadata has no RawBytes")
+	}
+}
+
+func TestDecodeWithMissingDocumentPart(t *testing.T) {
+	// A valid ZIP with no word/document.xml — IncludeTypedParts should
+	// succeed with Document == nil rather than erroring.
+	var buf bytes.Buffer
+	w := zip.NewWriter(&buf)
+	f, _ := w.Create("some-other-file.txt")
+	_, _ = f.Write([]byte("hello"))
+	_ = w.Close()
+
+	d, err := DecodeWith(buf.Bytes(), DecodeOptions{IncludeTypedParts: true})
+	if err != nil {
+		t.Fatalf("DecodeWith: %v", err)
+	}
+	if d.Document != nil {
+		t.Error("Document populated even though word/document.xml was absent")
+	}
+}
+
 func TestDecodeTrackedChanges(t *testing.T) {
 	var buf bytes.Buffer
 	w := zip.NewWriter(&buf)

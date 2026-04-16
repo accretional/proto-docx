@@ -82,20 +82,20 @@ fixture in `data/` verifies on each test run.
 If a consumer needs to edit content and re-emit, the intended pattern
 today is:
 
-1. `docxcodec.Decode(raw)` — populate the typed fields (counts, flags,
-   media parts).
-2. Open `raw` as a ZIP directly, read `word/document.xml` (or whatever
-   part you want to mutate), hand those bytes to `proto-xml`'s
-   `xmlcodec.Decode`, mutate the typed tree, then re-emit via
-   `xmlcodec.Encode`.
-3. Splice the mutated part back into the ZIP and call
-   `docxcodec.Encode` on a freshly-constructed
-   `DocxDocumentWithMetadata{RawBytes: newZip}` — or just write `newZip`
-   to disk directly. Both paths are byte-faithful.
+1. `docxcodec.DecodeWith(raw, DecodeOptions{IncludeTypedParts: true})` —
+   populate the typed fields and also hand `word/document.xml` to
+   `proto-xml`'s `xmlcodec.Decode`. The resulting
+   `*XmlDocumentWithMetadata` is exposed on `Decoded.Document`, so the
+   caller walks a typed XML tree without re-opening the ZIP.
+2. Mutate the typed tree, re-emit it via `xmlcodec.Encode` (structural)
+   or `xmlcodec.EncodeMetadata(_, {UseRawBytes: true})` (byte-faithful).
+3. Splice the new `word/document.xml` bytes back into the ZIP and write
+   the result. Everything else in the package (styles, numbering,
+   fonts, media, signatures) rides along verbatim.
 
-Wiring step 2 through the DOCX codec automatically (so callers get
-`doc.Document` as a typed `XmlDocumentWithMetadata` without manual
-unzipping) is a natural follow-up — see `README.md` `## NEXT STEPS`.
+Other OPC parts (`styles.xml`, `settings.xml`, `comments.xml`, etc.)
+still require a manual ZIP read today — extending `Decoded` to carry
+them is mechanical. See `README.md` `## NEXT STEPS`.
 
 ## Encoder / decoder contract
 
