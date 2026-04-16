@@ -135,6 +135,12 @@ func readZipFile(f *zip.File) ([]byte, error) {
 // remain on the raw-bytes path and surface via the typed xmlcodec tree
 // on DecodeWith.
 func parseDocumentXML(data []byte, doc *pb.DocxDocumentWithMetadata) {
+	// ParagraphCount is a document-wide summary — count every <w:p>
+	// element in the raw XML, not just the ones the typed walker
+	// reaches. Otherwise paragraphs inside unmodelled wrappers like
+	// <mc:AlternateContent> / <w:txbxContent> get silently dropped.
+	doc.ParagraphCount = countXMLElements(data, "p")
+
 	body := &pb.Body{}
 	doc.DocxPackage.Document = &pb.Document{Body: body}
 
@@ -192,10 +198,13 @@ func parseBlockContainer(dec *xml.Decoder, parent xml.StartElement, doc *pb.Docx
 // parseParagraph reads a <w:p> subtree and returns the populated
 // Paragraph. The paragraph's direct children are runs, tracked-change
 // wrappers, hyperlinks, and bookmark start/end markers.
+//
+// Note: doc.ParagraphCount is populated up-front in parseDocumentXML
+// from the raw XML, not incremented here — otherwise paragraphs inside
+// wrappers the typed walker skips (e.g. <mc:AlternateContent>) get
+// silently dropped from the count.
 func parseParagraph(dec *xml.Decoder, start xml.StartElement, doc *pb.DocxDocumentWithMetadata) *pb.Paragraph {
-	doc.ParagraphCount++
-	p := &pb.Paragraph{Content: parseParagraphChildren(dec, start, doc)}
-	return p
+	return &pb.Paragraph{Content: parseParagraphChildren(dec, start, doc)}
 }
 
 // parseTrackedInsertion reads a <w:ins> subtree within a paragraph.

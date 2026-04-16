@@ -796,6 +796,47 @@ func TestDecodeBodyTypedTreeBookmarks(t *testing.T) {
 	}
 }
 
+// TestDecodeParagraphCountCountsAlternateContent guards against the
+// undercount regression surfaced by the gluon experiment on
+// DOCX_TestPage.docx: paragraphs inside <mc:AlternateContent> and
+// <w:txbxContent> (drawing text boxes) must be included in
+// ParagraphCount even when the typed walker doesn't descend into their
+// wrappers.
+func TestDecodeParagraphCountCountsAlternateContent(t *testing.T) {
+	var buf bytes.Buffer
+	w := zip.NewWriter(&buf)
+	f, _ := w.Create("word/document.xml")
+	_, _ = f.Write([]byte(
+		`<?xml version="1.0"?>` +
+			`<w:document xmlns:w="http://w" xmlns:mc="http://mc"><w:body>` +
+			// One plain body paragraph.
+			`<w:p><w:r><w:t>top</w:t></w:r></w:p>` +
+			// A drawing with two paragraphs inside its text box, wrapped
+			// in mc:AlternateContent / mc:Choice — the typed walker
+			// skipElements the whole thing, but the count must still
+			// include both nested <w:p>.
+			`<w:p><w:r><mc:AlternateContent>` +
+			`<mc:Choice Requires="wps">` +
+			`<w:drawing><wps:txbx xmlns:wps="http://wps"><w:txbxContent>` +
+			`<w:p><w:r><w:t>tbx-a</w:t></w:r></w:p>` +
+			`<w:p><w:r><w:t>tbx-b</w:t></w:r></w:p>` +
+			`</w:txbxContent></wps:txbx></w:drawing>` +
+			`</mc:Choice>` +
+			`<mc:Fallback><w:pict/></mc:Fallback>` +
+			`</mc:AlternateContent></w:r></w:p>` +
+			`</w:body></w:document>`))
+	_ = w.Close()
+
+	doc, err := Decode(buf.Bytes())
+	if err != nil {
+		t.Fatalf("Decode: %v", err)
+	}
+	// 2 body-level + 2 inside txbxContent = 4 <w:p> in total.
+	if got, want := doc.ParagraphCount, int32(4); got != want {
+		t.Errorf("ParagraphCount = %d, want %d", got, want)
+	}
+}
+
 func TestDecodeTrackedChanges(t *testing.T) {
 	var buf bytes.Buffer
 	w := zip.NewWriter(&buf)

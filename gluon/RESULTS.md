@@ -54,17 +54,20 @@ both parsers across the same fixture set and reporting disagreements.
 | `generated/10_headers_footers.docx`       | ok       | 1 / 1                          |
 | `generated/11_kitchen_sink.docx`          | ok       | 2 / 2                          |
 | `generated/12_tables.docx`                | ok       | 10 / 10                        |
-| `DOCX_TestPage.docx` (real Word)          | ok       | **12 / 8 ← disagreement**      |
+| `DOCX_TestPage.docx` (real Word)          | ok       | 12 / 12 (was 12/8; fixed)      |
 | `sample-word-document.docx` (real Word)   | ok       | 1 / 1                          |
 
 Every fixture — including two real-world Word-authored DOCX files —
-parses under the grammar. The paragraph count agrees on every
-synthetic fixture. The only disagreement is on `DOCX_TestPage.docx`:
-raw `<w:p` occurrences = 12, gluon AST paragraph nodes = 12,
-`docxcodec.ParagraphCount` = 8. That's a docxcodec bug (four
-paragraphs inside an unmodelled wrapper element are being silently
-skipped during the count pass). Tracked as a follow-up; see
-`../README.md` `## NEXT STEPS` once recorded.
+parses under the grammar, and the paragraph count now agrees on every
+fixture. `DOCX_TestPage.docx` originally exposed a docxcodec
+undercount (raw `<w:p` = 12, gluon = 12, `docxcodec.ParagraphCount` =
+8) because four paragraphs live inside `<w:txbxContent>` wrapped by
+`<mc:AlternateContent>` / `<w:pict>` — the typed walker's default
+branch called `skipElement` on those wrappers, dropping their nested
+paragraphs from the count. Fix: `parseDocumentXML` now computes
+`ParagraphCount` up-front via `countXMLElements(data, "p")` on the
+raw XML, decoupling the count from the typed-tree walker's coverage.
+Gluon's cross-check is what surfaced this.
 
 ## What worked
 
@@ -151,19 +154,27 @@ gluon lexer model erases them. The right pattern is probably the one
 this experiment stumbled into by accident: run both parsers in a
 cross-check, treat disagreements as evidence of a bug somewhere.
 
-## Surprising finding: `docxcodec.ParagraphCount` undercounts
+## Surprising finding: `docxcodec.ParagraphCount` undercounted (fixed)
 
 `DOCX_TestPage.docx` contains 12 `<w:p>` elements (verified with
 `grep -o '<w:p[ >/]'` on the raw XML). Gluon's AST finds 12
-`paragraph` nodes. `docxcodec.Decode(...).ParagraphCount` returns 8.
+`paragraph` nodes. `docxcodec.Decode(...).ParagraphCount` originally
+returned 8.
 
-Root cause (not fixed in this experiment, tracked as follow-up):
-`parseDocumentXML` in `docxcodec/decode.go` walks the `<w:body>` tree
-but doesn't descend into all unmodelled wrappers. Some real-world
-DOCX files have paragraphs inside `w:sdtContent`, alternate-content
-branches, or section-broken containers that the hand parser's walker
-doesn't enter. Gluon's permissive `misc_child` catches them because
-the grammar lets `paragraph` appear inside any `misc_pair`.
+Root cause: four of the paragraphs are inside `<w:txbxContent>` inside
+`<mc:AlternateContent>` (Choice branch) or `<w:pict><v:textbox>`
+(Fallback branch) — wrappers the typed walker doesn't model. The
+default branch in `parseBlockContainer` called `skipElement`, which
+consumed the whole subtree (including nested `<w:p>`) without counting
+them. Gluon's permissive `misc_child` rule caught them because the
+grammar lets `paragraph` appear inside any `misc_pair`.
+
+Fix (commit following this experiment): `parseDocumentXML` computes
+`ParagraphCount` up-front from the raw XML via
+`countXMLElements(data, "p")` — decoupling the count from whichever
+subset of wrappers the typed-tree walker happens to model. The
+`gluon_test.go` cross-check was flipped from `t.Logf` to `t.Errorf`
+so future divergences fail loudly.
 
 This is the experiment's most concrete output: a reproducible
 discrepancy between two parsers on a real-world input, driven by a

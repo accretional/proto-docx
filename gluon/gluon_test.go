@@ -247,15 +247,16 @@ func TestParseCSTAcrossFixtures(t *testing.T) {
 			}
 
 			kinds := countKinds(ast.GetRoot())
-			// Gluon AST paragraphs vs. docxcodec.ParagraphCount. The
-			// counts should agree in principle — both are derived from
-			// word/document.xml alone — but DOCX_TestPage exposes a
-			// real discrepancy (gluon sees 12 <w:p>, docxcodec
-			// reports 8). We log it rather than failing because
-			// surfacing mismatches is the experiment's whole point;
-			// see RESULTS.md for the triage.
+			// Gluon AST paragraphs vs. docxcodec.ParagraphCount. Both
+			// derive from word/document.xml alone, so the counts must
+			// agree. DOCX_TestPage originally exposed a docxcodec
+			// undercount (12 raw <w:p>, 8 reported) because paragraphs
+			// inside <mc:AlternateContent>/<w:txbxContent> were
+			// swallowed by the typed walker; that's since been fixed
+			// by counting from the raw XML up-front in
+			// parseDocumentXML. See RESULTS.md for context.
 			if int32(kinds["paragraph"]) != doc.ParagraphCount {
-				t.Logf("paragraph count disagreement: gluon=%d, docxcodec=%d",
+				t.Errorf("paragraph count disagreement: gluon=%d, docxcodec=%d",
 					kinds["paragraph"], doc.ParagraphCount)
 			}
 		})
