@@ -113,8 +113,24 @@ func TestValidate(t *testing.T) {
 			if _, err := d.Fonts(); err != nil {
 				t.Errorf("d.Fonts: %v", err)
 			}
-			if _, err := d.Sections(); err != nil {
+			secs, err := d.Sections()
+			if err != nil {
 				t.Errorf("d.Sections: %v", err)
+			}
+			// Fixtures whose filenames imply headers/footers must
+			// surface at least one section with matching references.
+			if strings.Contains(rel, "10_headers_footers") || strings.Contains(rel, "11_kitchen_sink") {
+				if len(secs) == 0 {
+					t.Errorf("expected ≥1 section, got none")
+				} else {
+					s := secs[0]
+					if len(s.HeaderRefs) == 0 || len(s.FooterRefs) == 0 {
+						t.Errorf("expected header+footer refs, got headers=%d footers=%d", len(s.HeaderRefs), len(s.FooterRefs))
+					}
+					if s.PageWidth == 0 || s.PageHeight == 0 {
+						t.Errorf("expected page size populated, got %dx%d", s.PageWidth, s.PageHeight)
+					}
+				}
 			}
 		})
 	}

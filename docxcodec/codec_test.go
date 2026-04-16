@@ -5,6 +5,8 @@ import (
 	"bytes"
 	"testing"
 
+	xmlpb "openformat/gen/go/openformat/v1"
+
 	pb "openformat-docx/gen/go/openformat/v1"
 )
 
@@ -208,6 +210,64 @@ func TestDecodeWithTypedPartsOn(t *testing.T) {
 	}
 	if len(d.Document.RawBytes) == 0 {
 		t.Error("typed XmlDocumentWithMetadata has no RawBytes")
+	}
+}
+
+func TestDecodeWithAllTypedParts(t *testing.T) {
+	// Build a package with every typed-parts-eligible file populated.
+	var buf bytes.Buffer
+	w := zip.NewWriter(&buf)
+
+	parts := map[string]string{
+		"word/document.xml":  `<?xml version="1.0"?><w:document xmlns:w="http://w"><w:body><w:p><w:r><w:t>body</w:t></w:r></w:p></w:body></w:document>`,
+		"word/styles.xml":    `<?xml version="1.0"?><w:styles xmlns:w="http://w"/>`,
+		"word/numbering.xml": `<?xml version="1.0"?><w:numbering xmlns:w="http://w"/>`,
+		"word/settings.xml":  `<?xml version="1.0"?><w:settings xmlns:w="http://w"/>`,
+		"word/fontTable.xml": `<?xml version="1.0"?><w:fonts xmlns:w="http://w"><w:font w:name="X"/></w:fonts>`,
+		"word/comments.xml":  `<?xml version="1.0"?><w:comments xmlns:w="http://w"><w:comment/></w:comments>`,
+		"word/footnotes.xml": `<?xml version="1.0"?><w:footnotes xmlns:w="http://w"><w:footnote/></w:footnotes>`,
+		"word/endnotes.xml":  `<?xml version="1.0"?><w:endnotes xmlns:w="http://w"><w:endnote/></w:endnotes>`,
+		"word/header1.xml":   `<?xml version="1.0"?><w:hdr xmlns:w="http://w"><w:p/></w:hdr>`,
+		"word/header2.xml":   `<?xml version="1.0"?><w:hdr xmlns:w="http://w"><w:p/></w:hdr>`,
+		"word/footer1.xml":   `<?xml version="1.0"?><w:ftr xmlns:w="http://w"><w:p/></w:ftr>`,
+	}
+	for name, body := range parts {
+		f, _ := w.Create(name)
+		_, _ = f.Write([]byte(body))
+	}
+	_ = w.Close()
+
+	d, err := DecodeWith(buf.Bytes(), DecodeOptions{IncludeTypedParts: true})
+	if err != nil {
+		t.Fatalf("DecodeWith: %v", err)
+	}
+
+	singulars := map[string]*xmlpb.XmlDocumentWithMetadata{
+		"Document":  d.Document,
+		"Styles":    d.Styles,
+		"Numbering": d.Numbering,
+		"Settings":  d.Settings,
+		"FontTable": d.FontTable,
+		"Comments":  d.Comments,
+		"Footnotes": d.Footnotes,
+		"Endnotes":  d.Endnotes,
+	}
+	for name, meta := range singulars {
+		if meta == nil || meta.Document == nil || meta.Document.DocumentElement == nil {
+			t.Errorf("%s not fully parsed", name)
+		}
+	}
+
+	if len(d.Headers) != 2 {
+		t.Errorf("Headers len = %d, want 2", len(d.Headers))
+	}
+	if len(d.Footers) != 1 {
+		t.Errorf("Footers len = %d, want 1", len(d.Footers))
+	}
+	for _, h := range d.Headers {
+		if h.Document == nil || h.Document.Document == nil || h.Document.Document.DocumentElement == nil {
+			t.Errorf("header %q not fully parsed", h.Name)
+		}
 	}
 }
 

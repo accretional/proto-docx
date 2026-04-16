@@ -20,6 +20,15 @@ secs, _ := docxcodec.ExtractSections(raw) // page size, margins, cols, header/fo
 // Or for richer access (typed XML tree + extraction methods in one object):
 d, _ := docxcodec.DecodeWith(raw, docxcodec.DecodeOptions{IncludeTypedParts: true})
 _ = d.Document    // *XmlDocumentWithMetadata for word/document.xml
+_ = d.Styles      // ... word/styles.xml
+_ = d.Numbering   // ... word/numbering.xml
+_ = d.Settings    // ... word/settings.xml
+_ = d.FontTable   // ... word/fontTable.xml
+_ = d.Comments    // ... word/comments.xml
+_ = d.Footnotes   // ... word/footnotes.xml
+_ = d.Endnotes    // ... word/endnotes.xml
+_ = d.Headers     // []TypedPart — one per word/header*.xml
+_ = d.Footers     // []TypedPart — one per word/footer*.xml
 _ = d.Text()      // same as ExtractText
 _ = d.Fonts()     // same as ExtractFonts
 _ = d.Sections()  // same as ExtractSections
@@ -159,14 +168,16 @@ is not introspectable via typed fields:
   `openformat.proto` and `pdf_document.proto` which aren't vendored
   here. Users that want typed-proto extraction can compose on top of
   the plain-Go returns.
-- **Typed XML parts beyond `word/document.xml` still require manual
-  unzipping.** `docxcodec.DecodeWith(raw, DecodeOptions{IncludeTypedParts: true})`
-  now hands `word/document.xml` to `proto-xml`'s `xmlcodec.Decode` and
-  exposes the result on `Decoded.Document`, but other OPC parts
-  (`styles.xml`, `numbering.xml`, `settings.xml`, comments, notes,
-  headers/footers) still arrive only as raw ZIP bytes. Extending the
-  typed-parts surface is mechanical — each added part is another
-  `xmlcodec.Decode` plus a field on `Decoded`.
+- **Typed-proto population of the main body is shallow.** `Decode`
+  detects paragraphs / tracked changes / media / fonts and populates
+  the summary fields on `DocxDocumentWithMetadata`, but
+  `DocxPackage.Document.Body.Paragraphs[*].Runs[*].Text` is left
+  empty. Consumers who want typed-proto access to paragraph content
+  today must either (a) use `ExtractText` for a flat string, or (b)
+  walk the `*XmlDocumentWithMetadata` tree on `Decoded.Document`.
+  Populating `Body` directly is mechanical but wide — every OOXML
+  run-level construct (runs, text, breaks, tabs, nested structures)
+  maps to a specific proto field.
 - **DOCX conformance class / version detection.** Strict vs.
   transitional OOXML isn't surfaced on `DocxDocumentWithMetadata`;
   callers have to inspect `Package.ContentTypes` themselves.

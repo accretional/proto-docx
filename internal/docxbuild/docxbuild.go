@@ -167,7 +167,7 @@ func buildContentTypes(s Spec) string {
 func buildDocument(s Spec) string {
 	var sb strings.Builder
 	sb.WriteString(`<?xml version="1.0" encoding="UTF-8"?>`)
-	sb.WriteString(`<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:body>`)
+	sb.WriteString(`<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><w:body>`)
 	paragraphs := s.Paragraphs
 	if len(paragraphs) == 0 {
 		paragraphs = []string{"Hello DOCX"}
@@ -187,7 +187,34 @@ func buildDocument(s Spec) string {
 	if s.TrackedDelete != "" {
 		sb.WriteString(`<w:p><w:del w:id="2" w:author="t" w:date="2026-04-16T00:00:00Z"><w:r><w:delText>` + escape(s.TrackedDelete) + `</w:delText></w:r></w:del></w:p>`)
 	}
-	sb.WriteString(`<w:sectPr/></w:body></w:document>`)
+	sb.WriteString(buildSectPr(s))
+	sb.WriteString(`</w:body></w:document>`)
+	return sb.String()
+}
+
+// buildSectPr emits the trailing <w:sectPr>. When the spec has headers
+// or footers, sectPr is enriched with page dimensions, one-inch
+// margins, and w:headerReference / w:footerReference entries — enough
+// to exercise ExtractSections end-to-end. With no headers / footers,
+// sectPr stays empty.
+func buildSectPr(s Spec) string {
+	if s.Headers == 0 && s.Footers == 0 {
+		return `<w:sectPr/>`
+	}
+	hfRefTypes := []string{"default", "first", "even"}
+	var sb strings.Builder
+	sb.WriteString(`<w:sectPr>`)
+	for i := 1; i <= s.Headers; i++ {
+		t := hfRefTypes[(i-1)%len(hfRefTypes)]
+		sb.WriteString(fmt.Sprintf(`<w:headerReference w:type=%q r:id=%q/>`, t, fmt.Sprintf("rIdH%d", i)))
+	}
+	for i := 1; i <= s.Footers; i++ {
+		t := hfRefTypes[(i-1)%len(hfRefTypes)]
+		sb.WriteString(fmt.Sprintf(`<w:footerReference w:type=%q r:id=%q/>`, t, fmt.Sprintf("rIdF%d", i)))
+	}
+	sb.WriteString(`<w:pgSz w:w="12240" w:h="15840" w:orient="portrait"/>`)
+	sb.WriteString(`<w:pgMar w:top="1440" w:right="1800" w:bottom="1440" w:left="1800"/>`)
+	sb.WriteString(`</w:sectPr>`)
 	return sb.String()
 }
 
